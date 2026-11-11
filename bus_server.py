@@ -113,7 +113,8 @@ def search_bus_station(name: str, city: str = "") -> str:
     inner = [s for s in pool if name in s["name"] and not s["name"].startswith(name)]
     hits = exact + starts + inner
     if not hits:
-        return f"'{name}' 정류소를 찾지 못했습니다. 이름을 줄이거나 다르게 입력해 보세요."
+        return (f"'{name}' 정류소를 찾지 못했습니다. 경기도 내 정류소만 조회할 수 있으니 "
+                "경기도 정류소 이름을 입력하도록 안내하세요 (이름을 줄여 입력해도 됩니다).")
     note = f"(총 {len(hits)}건 중 {MAX_STATIONS}건)\n" if len(hits) > MAX_STATIONS else ""
     return note + _dump(hits[:MAX_STATIONS])
 

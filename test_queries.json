@@ -98,23 +98,29 @@
     {
       "id": "out-01",
       "category": "out",
-      "note": "없는 정류소는 지어내지 않고 못 찾았다고 안내",
+      "note": "없는 정류소는 지어내지 않고 못 찾았다고 안내 + 경기도 정류소만 입력하라고 안내",
       "message": "쿄쿄쿄없는정류장 버스 언제 와?",
       "expect": {
         "intent": "bus_arrival",
         "regex": "찾지 못|찾을 수 없|없습니다|확인",
-        "not_regex": "\\d+\\s*분 후"
+        "not_regex": "\\d+\\s*분 후",
+        "contains_all": [
+          "경기도"
+        ]
       }
     },
     {
       "id": "out-04",
       "category": "out",
-      "note": "그럴듯하지만 없는 정류소 이름도 검색 후 못 찾았다고 안내",
+      "note": "그럴듯하지만 없는 정류소 이름도 검색 후 못 찾았다고 안내 + 경기도 정류소만 입력하라고 안내",
       "message": "판교우주정거장 버스 언제 와?",
       "expect": {
         "intent": "bus_arrival",
         "regex": "찾지 못|찾을 수 없",
-        "not_regex": "\\d+\\s*분 후"
+        "not_regex": "\\d+\\s*분 후",
+        "contains_all": [
+          "경기도"
+        ]
       }
     },
     {
