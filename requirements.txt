@@ -1,7 +1,7 @@
 fastapi>=0.115
 uvicorn[standard]>=0.30
 
-# bus_* (경기도 버스 MCP 서버 / LangGraph 에이전트 / 텔레그램 봇)
+# bus_* (경기도 버스 MCP 서버 / LangGraph 에이전트)
 python-dotenv
 httpx
 requests

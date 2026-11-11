@@ -39,7 +39,7 @@ async def build_agent(prompt: str = SYSTEM_PROMPT, **agent_kwargs):
     """MCP 서버에 접속해 도구를 받고, 그 도구로 ReAct 에이전트를 만들어 (agent, tools)를 돌려줍니다.
 
     에이전트는 공공데이터포털이나 API 키를 전혀 모르고, 서버가 노출한 도구만 호출합니다.
-    텔레그램 같은 입출력 쪽은 이 함수만 불러다 쓰면 됩니다.
+    웹 챗봇(chat_graph.py) 같은 입출력 쪽은 이 함수만 불러다 쓰면 됩니다.
     """
     client = MultiServerMCPClient({
         "gg-bus": {"url": BUS_MCP_URL, "transport": "streamable_http"},

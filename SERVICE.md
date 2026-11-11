@@ -2,7 +2,6 @@
 
 정류소 이름만 말하면 경기도 버스의 실시간 도착 정보를 알려 주는 대화형 에이전트.
 웹 챗봇(`main.py` + `index.html`)은 LangGraph 그래프(`chat_graph.py`)로 질문을 분류한 뒤 맞는 에이전트로 보낸다.
-텔레그램 봇(`bus_telegram.py`)은 버스 에이전트(`bus_agent.py`)를 직접 쓴다.
 에이전트는 버스 MCP 서버(`bus_server.py`)가 노출한 도구로만 데이터를 조회한다.
 
 ```
@@ -17,7 +16,6 @@ START -> classify -+-> bus_arrival  (MCP 도구를 쓰는 ReAct 에이전트) ->
 - **지금은 어떻게 해결하나 / 무엇이 좋아지나:**
   - 지금은 지도·버스 앱을 열고 정류소를 검색한 뒤, 같은 이름의 정류소 중 방향을 골라 목록을 훑는다.
   - 이 에이전트는 같은 이름의 정류소(방향별)를 번호 목록으로 보여 주고 번호 하나로 고르게 한다. 그 뒤 도착 정보가 있는 노선만 "노선(행선지) N분 후, M정류장 전"으로 요약한다.
-  - 텔레그램처럼 이미 쓰는 메신저 안에서 바로 물어볼 수 있다.
 
 ## 2. 서비스 확장 관점
 - **기여 / 수익화:**
@@ -41,7 +39,7 @@ START -> classify -+-> bus_arrival  (MCP 도구를 쓰는 ReAct 에이전트) ->
 
 - **그래프·에이전트:** LangGraph `StateGraph` (classify 노드: 구조화 출력으로 intent 분류 → 조건부 엣지)
   + `create_react_agent` 버스 에이전트 서브그래프. 모델은 AWS Bedrock Claude Haiku 4.5 (`BUS_MODEL_ID`로 교체 가능)
-- **인터페이스:** FastAPI 웹 챗봇(`/api/chat`), 텔레그램 롱폴링 봇
+- **인터페이스:** FastAPI 웹 챗봇(`/api/chat`)
 - **데이터 소스:** 모두 실제 데이터
   - 공공데이터포털 경기도 버스도착정보 API (실시간, `DATA_GO_KR_KEY` 필요)
   - 공공데이터 정류소 목록으로 만든 `gg_stations.json` (정류소 46,070건)
