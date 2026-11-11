@@ -1,6 +1,7 @@
 """경기도 버스 도착 정보 챗봇 서버.
 
-정류소 이름을 말하면 버스 MCP 서버(bus_server.py)의 도구로 정류소를 찾고 도착 정보를 알려 준다.
+질문은 LangGraph 그래프(chat_graph.py)로 보낸다. classify 노드가 질문을 분류해
+버스 도착 에이전트(MCP 도구 사용) 또는 범위 밖 안내 노드로 보낸다.
 
 실행:
     pip install -r requirements.txt
@@ -17,23 +18,12 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from bus_agent import SYSTEM_PROMPT, build_agent, get_text
+from bus_agent import get_text
+from chat_graph import build_chat_graph
 
 BASE_DIR = Path(__file__).parent
 
-WEB_PROMPT = SYSTEM_PROMPT + """
-
-[웹 챗봇 답변 형식]
-- 일반 텍스트로 짧게 답하세요. 마크다운(**, #, 표)은 쓰지 마세요. 줄바꿈과 '-' 목록은 괜찮습니다.
-- 노선마다 한 줄로: 노선번호(행선지) N분 후, M정류장 전. 다음 차가 있으면 이어서 적으세요.
-- 후보 목록은 한 줄에 하나씩 '번호. 이름 (시군, 정류소번호 N, ID 9자리)' 형식으로 쓰세요.
-  다음 질문에서는 이전 도구 결과가 보이지 않으므로, 사용자가 고르면 목록에 적힌 ID로 바로 get_bus_arrival_list를 호출하세요.
-- 버스와 관계없는 질문에는 경기도 버스 도착 정보만 안내할 수 있다고 답하세요.
-- 질문에 정류소로 볼 만한 단어가 전혀 없을 때만 '정류소 이름을 알려 주세요 (예: 미금역)'라고 물어보세요.
-  처음 보는 이름이라도 일단 search_bus_station으로 검색하세요.
-- 검색 결과가 없으면 "'(입력한 이름)' 정류소를 찾지 못했습니다."라고 분명히 말하고, 이름을 줄이거나 바꿔 다시 물어보라고 안내하세요."""
-
-KEEP_LAST_MESSAGES = 6  # 모델에 보내는 이전 대화 상한 (토큰 절약)
+KEEP_LAST_MESSAGES = 6  # 그래프에 보내는 이전 대화 상한 (토큰 절약)
 
 
 class Message(BaseModel):
@@ -48,26 +38,27 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
+    intent: str | None = None  # classify 결과 (디버깅·테스트용)
 
 
-_agent = None
-_agent_lock = asyncio.Lock()
+_graph = None
+_graph_lock = asyncio.Lock()
 
 
-async def get_agent():
-    """MCP 서버에 처음 접속할 때 에이전트를 만든다. 서버가 늦게 떠도 다음 요청에서 다시 시도한다."""
-    global _agent
-    async with _agent_lock:
-        if _agent is None:
-            _agent, _ = await build_agent(WEB_PROMPT)
-    return _agent
+async def get_graph():
+    """MCP 서버에 처음 접속할 때 그래프를 만든다. 서버가 늦게 떠도 다음 요청에서 다시 시도한다."""
+    global _graph
+    async with _graph_lock:
+        if _graph is None:
+            _graph = await build_chat_graph()
+    return _graph
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
-        await get_agent()
-        print("버스 MCP 서버 연결 완료")
+        await get_graph()
+        print("버스 MCP 서버 연결 완료, 챗 그래프 준비 완료")
     except RuntimeError as e:
         print(f"[경고] {e} (첫 질문 때 다시 시도합니다)")
     yield
@@ -76,11 +67,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="miniPJT 버스 챗봇", lifespan=lifespan)
 
 
-async def generate_reply(message: str, history: list[Message]) -> str:
+async def generate_reply(message: str, history: list[Message]) -> ChatResponse:
     try:
-        agent = await get_agent()
+        graph = await get_graph()
     except RuntimeError as e:
-        return str(e)
+        return ChatResponse(reply=str(e))
 
     # 브라우저가 보내 준 대화 기록으로 맥락(후보 정류소 번호 선택 등)을 이어간다
     recent = [m for m in history if m.role in ("user", "assistant") and m.content][-KEEP_LAST_MESSAGES:]
@@ -89,11 +80,12 @@ async def generate_reply(message: str, history: list[Message]) -> str:
     messages = [(m.role, m.content) for m in recent] + [("user", message)]
 
     try:
-        result = await agent.ainvoke({"messages": messages}, {"recursion_limit": 12})
+        result = await graph.ainvoke({"messages": messages}, {"recursion_limit": 20})
     except Exception as e:
-        print(f"에이전트 오류: {type(e).__name__}: {e}")
-        return f"조회 중 오류가 났습니다 ({type(e).__name__}). 잠시 후 다시 시도해 주세요."
-    return get_text(result["messages"][-1]) or "답변을 만들지 못했습니다."
+        print(f"그래프 오류: {type(e).__name__}: {e}")
+        return ChatResponse(reply=f"조회 중 오류가 났습니다 ({type(e).__name__}). 잠시 후 다시 시도해 주세요.")
+    reply = get_text(result["messages"][-1]) or "답변을 만들지 못했습니다."
+    return ChatResponse(reply=reply, intent=result.get("intent"))
 
 
 @app.get("/")
@@ -106,9 +98,9 @@ async def chat(req: ChatRequest) -> ChatResponse:
     message = req.message.strip()
     if not message:
         return ChatResponse(reply="정류소 이름을 알려 주세요 (예: 미금역).")
-    return ChatResponse(reply=await generate_reply(message[:500], req.history))
+    return await generate_reply(message[:500], req.history)
 
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok", "bus_agent": _agent is not None}
+    return {"status": "ok", "chat_graph": _graph is not None}

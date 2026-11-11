@@ -1,8 +1,15 @@
 # SERVICE · 경기 버스 도착 챗봇
 
 정류소 이름만 말하면 경기도 버스의 실시간 도착 정보를 알려 주는 대화형 에이전트.
-웹 챗봇(`main.py` + `index.html`)과 텔레그램 봇(`bus_telegram.py`)이 같은 에이전트(`bus_agent.py`)를 쓰고,
+웹 챗봇(`main.py` + `index.html`)은 LangGraph 그래프(`chat_graph.py`)로 질문을 분류한 뒤 맞는 에이전트로 보낸다.
+텔레그램 봇(`bus_telegram.py`)은 버스 에이전트(`bus_agent.py`)를 직접 쓴다.
 에이전트는 버스 MCP 서버(`bus_server.py`)가 노출한 도구로만 데이터를 조회한다.
+
+```
+START -> classify -+-> bus_arrival  (MCP 도구를 쓰는 ReAct 에이전트) -> END
+                   +-> out_of_scope (고정 안내, LLM 호출 없음)      -> END
+```
+지금은 정류소 도착 문의(`bus_arrival`)만 지원한다. 새 기능은 `chat_graph.py`의 `Intent`에 값을 추가하고 노드를 등록해 붙인다.
 
 ## 1. 사용자·문제·가치
 - **누구를 위한 서비스인가:** 경기도에서 매일 버스로 출퇴근·통학하는 사람. 특히 자주 타는 정류소가 정해져 있고 집이나 사무실을 나서기 직전에 "지금 나가면 탈 수 있나"를 확인하려는 사람.
@@ -32,7 +39,8 @@
   | `get_bus_arrival_list(station_id)` | 정류소의 노선별 도착 예정 시간·남은 정류장·빈 좌석 | 경기도_버스도착정보 조회 v2 `getBusArrivalListv2` |
   | `get_bus_arrival_item(station_id, route_id, sta_order)` | 한 노선의 도착 정보 | 같은 서비스 `getBusArrivalItemv2` |
 
-- **에이전트:** LangGraph `create_react_agent` + AWS Bedrock Claude Haiku 4.5 (`BUS_MODEL_ID`로 교체 가능)
+- **그래프·에이전트:** LangGraph `StateGraph` (classify 노드: 구조화 출력으로 intent 분류 → 조건부 엣지)
+  + `create_react_agent` 버스 에이전트 서브그래프. 모델은 AWS Bedrock Claude Haiku 4.5 (`BUS_MODEL_ID`로 교체 가능)
 - **인터페이스:** FastAPI 웹 챗봇(`/api/chat`), 텔레그램 롱폴링 봇
 - **데이터 소스:** 모두 실제 데이터
   - 공공데이터포털 경기도 버스도착정보 API (실시간, `DATA_GO_KR_KEY` 필요)
@@ -41,7 +49,7 @@
 ## 4. 서비스 정책 (가드레일 요약)
 1. **도구 결과에만 근거해 답한다.** 정류소 존재 여부나 도착 시간을 짐작하지 않고, 정류소 이름이 나오면 반드시 `search_bus_station`부터 호출한다.
 2. **정류소가 2곳 이상이면 조회하지 않고 되묻는다.** 후보를 번호 목록(이름, 시군, 정류소번호, ID)으로 보여 주고 사용자가 고른 정류소만 조회한다. 정류소번호는 시군 간에 겹치므로 9자리 ID로 조회한다.
-3. **경기도 버스 도착 정보 외의 질문은 정중히 범위 밖이라고 안내한다.**
+3. **경기도 버스 도착 정보 외의 질문은 범위 밖이라고 안내한다.** classify가 out_of_scope로 분류하면 에이전트·도구를 거치지 않고 고정 문구로 답한다.
 4. **비밀값을 노출하지 않는다.** API 키는 MCP 서버 환경변수에만 두고 에이전트·사용자에게 전달하지 않으며, MCP 서버는 인증이 없으므로 `127.0.0.1`에만 바인딩한다.
 5. **API 인증 오류는 재시도하지 않고** 키/활용신청 확인을 안내하며, 일시적 오류만 다시 시도를 권한다.
 - 세부 케이스는 `test_queries.json`의 guardrail 항목에서 검증한다. `python run_tests.py`로 실행 (MCP 서버와 챗봇을 먼저 띄울 것).
@@ -52,5 +60,5 @@
   - 정류소 이름 질문 → 도착 정보까지 걸리는 대화 턴 수: 단일 정류소 1턴, 동명 정류소 2턴 이내
   - 응답 시간: 질문 1건당 10초 이내
   - 답변의 도착 시간이 같은 시점의 API 원본 값과 일치 (환각 0건)
-- **현재 결과 (2026-11-11):** 15건 중 15건 통과 (in 6/6, out 4/4, guardrail 5/5), 평균 응답 3.6초.
-  서버를 띄운 직후 첫 요청만 21초로 느리고, 나머지 요청은 1~5초.
+- **현재 결과 (2026-11-11, LangGraph 분류 구조):** 18건 중 18건 통과 (in 6/6, out 4/4, guardrail 5/5, classify 3/3), 평균 응답 2.7초.
+  모든 케이스에서 분류(intent)도 검사한다. 범위 밖 질문은 1초 안에 답하고, 도착 조회는 3~7초 걸린다.

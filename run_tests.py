@@ -26,9 +26,11 @@ SLOW_SECONDS = 10  # 응답 시간 목표 (판정에는 넣지 않고 표시만)
 ENV = {k: v for k, v in dotenv_values(BASE_DIR / ".env").items() if v}
 
 
-def check(reply: str, expect: dict) -> list[str]:
+def check(reply: str, intent: str | None, expect: dict) -> list[str]:
     """어긴 규칙 설명 목록을 돌려준다. 비어 있으면 통과."""
     fails = []
+    if "intent" in expect and intent != expect["intent"]:
+        fails.append(f"분류 불일치: {intent} (기대 {expect['intent']})")
     if "regex" in expect and not re.search(expect["regex"], reply):
         fails.append(f"regex 불일치: {expect['regex']}")
     if "not_regex" in expect and re.search(expect["not_regex"], reply):
@@ -58,8 +60,9 @@ def main() -> int:
                 res = http.post(f"{CHATBOT_URL}/api/chat",
                                 json={"message": c["message"], "history": c.get("history", [])})
                 res.raise_for_status()
-                reply = res.json()["reply"]
-                fails = check(reply, c["expect"])
+                body = res.json()
+                reply = body["reply"]
+                fails = check(reply, body.get("intent"), c["expect"])
             except Exception as e:
                 reply, fails = "", [f"요청 실패: {type(e).__name__}: {e}"]
             took = time.perf_counter() - started
@@ -79,7 +82,7 @@ def main() -> int:
     total = rate(results)
     guard = rate([r for r in results if r[0]["category"] == "guardrail"])
     print("\n카테고리별 통과율")
-    for cat in ("in", "out", "guardrail"):
+    for cat in ("in", "out", "guardrail", "classify"):
         items = [r for r in results if r[0]["category"] == cat]
         if items:
             print(f"  {cat:9} {sum(1 for _, f, _ in items if not f)}/{len(items)}")
