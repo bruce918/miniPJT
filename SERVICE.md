@@ -5,7 +5,7 @@
 에이전트는 버스 MCP 서버(`bus_server.py`)가 노출한 도구로만 데이터를 조회한다.
 
 ```
-START -> classify -+-> bus_arrival  (MCP 도구를 쓰는 ReAct 에이전트) -> END
+START -> classify -+-> bus_arrival  (MCP 도구 + render_table을 쓰는 ReAct 에이전트) -> END
                    +-> out_of_scope (고정 안내, LLM 호출 없음)      -> END
 ```
 지금은 정류소 도착 문의(`bus_arrival`)만 지원한다. 새 기능은 `chat_graph.py`의 `Intent`에 값을 추가하고 노드를 등록해 붙인다.
@@ -37,6 +37,14 @@ START -> classify -+-> bus_arrival  (MCP 도구를 쓰는 ReAct 에이전트) ->
   | `get_bus_arrival_list(station_id)` | 정류소의 노선별 도착 예정 시간·남은 정류장·빈 좌석 | 경기도_버스도착정보 조회 v2 `getBusArrivalListv2` |
   | `get_bus_arrival_item(station_id, route_id, sta_order)` | 한 노선의 도착 정보 | 같은 서비스 `getBusArrivalItemv2` |
 
+- **로컬 도구** (`table_tool.py`, 에이전트에 MCP 도구와 함께 등록)
+
+  | 도구 | 기능 | 데이터 |
+  |---|---|---|
+  | `render_table(kind, title)` | 정류소 후보(`stations`)나 도착 정보(`arrivals`)를 화면에 표로 그린다. 후보 표는 행을 눌러 고를 수 있고, 2분 이내 도착은 강조한다 | 같은 턴의 MCP 도구 결과를 그래프 상태에서 직접 읽음 (LLM이 값을 옮겨 적지 않음) |
+
+  모델이 표 도구를 빠뜨리면 서버가 같은 함수로 표를 만든다 (`auto: true`로 표시하고 로그를 남긴다).
+
 - **그래프·에이전트:** LangGraph `StateGraph` (classify 노드: 구조화 출력으로 intent 분류 → 조건부 엣지)
   + `create_react_agent` 버스 에이전트 서브그래프. 모델은 AWS Bedrock Claude Haiku 4.5 (`BUS_MODEL_ID`로 교체 가능)
 - **인터페이스:** FastAPI 웹 챗봇(`/api/chat`)
@@ -58,5 +66,6 @@ START -> classify -+-> bus_arrival  (MCP 도구를 쓰는 ReAct 에이전트) ->
   - 정류소 이름 질문 → 도착 정보까지 걸리는 대화 턴 수: 단일 정류소 1턴, 동명 정류소 2턴 이내
   - 응답 시간: 질문 1건당 10초 이내
   - 답변의 도착 시간이 같은 시점의 API 원본 값과 일치 (환각 0건)
-- **현재 결과 (2026-11-11, LangGraph 분류 구조):** 18건 중 18건 통과 (in 6/6, out 4/4, guardrail 5/5, classify 3/3), 평균 응답 2.7초.
-  모든 케이스에서 분류(intent)도 검사한다. 범위 밖 질문은 1초 안에 답하고, 도착 조회는 3~7초 걸린다.
+- **현재 결과 (2026-11-11, LangGraph 분류 구조 + 표 도구):** 18건 중 18건 통과 (in 6/6, out 4/4, guardrail 5/5, classify 3/3), 평균 응답 2.8초.
+  모든 케이스에서 분류(intent)와 표 종류도 검사한다. 안전망 표 0건 (모델이 render_table을 매번 직접 호출).
+  범위 밖 질문은 1초 안에 답하고, 도착 조회는 3~7초 걸린다.

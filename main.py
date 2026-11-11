@@ -16,10 +16,12 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
+from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import BaseModel
 
 from bus_agent import get_text
 from chat_graph import build_chat_graph
+from table_tool import fallback_tables
 
 BASE_DIR = Path(__file__).parent
 
@@ -39,6 +41,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     intent: str | None = None  # classify 결과 (디버깅·테스트용)
+    tables: list[dict] = []    # render_table 도구가 만든 표 (UI가 그린다. 각 표의 text는 평문 버전)
 
 
 _graph = None
@@ -84,13 +87,23 @@ async def generate_reply(message: str, history: list[Message]) -> ChatResponse:
     except Exception as e:
         print(f"그래프 오류: {type(e).__name__}: {e}")
         return ChatResponse(reply=f"조회 중 오류가 났습니다 ({type(e).__name__}). 잠시 후 다시 시도해 주세요.")
-    reply = get_text(result["messages"][-1]) or "답변을 만들지 못했습니다."
-    return ChatResponse(reply=reply, intent=result.get("intent"))
+    turn = result["messages"][len(messages):]  # 이번 턴에 새로 생긴 메시지 (입력으로 보낸 메시지 뒤쪽)
+    # 모델이 render_table 호출과 함께 답을 먼저 쓰고 마지막 메시지를 비우는 경우가 있어,
+    # 마지막 메시지가 비면 이번 턴의 가장 최근 AI 텍스트를 쓴다.
+    ai_texts = [get_text(m).strip() for m in turn if isinstance(m, AIMessage)]
+    reply = next((t for t in reversed(ai_texts) if t), "") or "답변을 만들지 못했습니다."
+    tables = [m.artifact for m in turn if isinstance(m, ToolMessage) and m.name == "render_table" and m.artifact]
+    if not tables:
+        tables = fallback_tables(turn)
+        if tables:
+            print(f"[안전망] 모델이 render_table을 호출하지 않아 서버가 표를 만들었습니다: {tables[0]['kind']}")
+    return ChatResponse(reply=reply, intent=result.get("intent"), tables=tables)
 
 
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(BASE_DIR / "index.html")
+    # UI를 고친 뒤 브라우저가 예전 index.html을 쓰지 않도록 매번 다시 확인하게 한다
+    return FileResponse(BASE_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 @app.post("/api/chat", response_model=ChatResponse)

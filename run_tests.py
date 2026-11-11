@@ -26,9 +26,17 @@ SLOW_SECONDS = 10  # 응답 시간 목표 (판정에는 넣지 않고 표시만)
 ENV = {k: v for k, v in dotenv_values(BASE_DIR / ".env").items() if v}
 
 
-def check(reply: str, intent: str | None, expect: dict) -> list[str]:
-    """어긴 규칙 설명 목록을 돌려준다. 비어 있으면 통과."""
+def check(reply: str, intent: str | None, tables: list[dict], expect: dict) -> list[str]:
+    """어긴 규칙 설명 목록을 돌려준다. 비어 있으면 통과.
+
+    reply에는 표의 평문(text)도 붙여서 검사한다 (정류소 ID·도착 시간이 표에만 있을 수 있음).
+    """
     fails = []
+    kinds = [t.get("kind") for t in tables]
+    if "table" in expect and expect["table"] not in kinds:
+        fails.append(f"표 없음: {expect['table']} (받은 표 {kinds})")
+    if expect.get("no_table") and kinds:
+        fails.append(f"표가 없어야 함 (받은 표 {kinds})")
     if "intent" in expect and intent != expect["intent"]:
         fails.append(f"분류 불일치: {intent} (기대 {expect['intent']})")
     if "regex" in expect and not re.search(expect["regex"], reply):
@@ -53,6 +61,7 @@ def main() -> int:
         cases = [c for c in cases if c["id"] in sys.argv[1:]]
 
     results = []  # (case, fails, seconds)
+    auto_cases = []  # 모델이 render_table을 빠뜨려 서버 안전망이 표를 만든 케이스
     with httpx.Client(timeout=120) as http:
         for c in cases:
             started = time.perf_counter()
@@ -61,8 +70,11 @@ def main() -> int:
                                 json={"message": c["message"], "history": c.get("history", [])})
                 res.raise_for_status()
                 body = res.json()
-                reply = body["reply"]
-                fails = check(reply, body.get("intent"), c["expect"])
+                tables = body.get("tables", [])
+                reply = "\n\n".join([body["reply"], *(t.get("text", "") for t in tables)])
+                fails = check(reply, body.get("intent"), tables, c["expect"])
+                if any(t.get("auto") for t in tables):
+                    auto_cases.append(c["id"])
             except Exception as e:
                 reply, fails = "", [f"요청 실패: {type(e).__name__}: {e}"]
             took = time.perf_counter() - started
@@ -88,6 +100,8 @@ def main() -> int:
             print(f"  {cat:9} {sum(1 for _, f, _ in items if not f)}/{len(items)}")
     avg = sum(t for _, _, t in results) / len(results) if results else 0
     print(f"전체 {total:.0%} (기준 {PASS_ALL:.0%}), guardrail {guard:.0%} (기준 {PASS_GUARD:.0%}), 평균 응답 {avg:.1f}s")
+
+    print(f"안전망 표 {len(auto_cases)}건 (모델이 render_table을 빠뜨린 케이스): {auto_cases}")
 
     ok = total >= PASS_ALL and guard >= PASS_GUARD
     print("=> 완성 기준 통과" if ok else "=> 완성 기준 미달")

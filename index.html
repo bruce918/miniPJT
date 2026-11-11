@@ -14,6 +14,10 @@
       --user: #2563eb;
       --user-text: #ffffff;
       --bot: #eef0f3;
+      --hover: #f3f6fd;
+      --soon: #dc2626;
+      --soon-bg: #fdecec;
+      --badge-bg: #eef0f3;
     }
     @media (prefers-color-scheme: dark) {
       :root {
@@ -24,6 +28,10 @@
         --border: #2d3138;
         --user: #3b82f6;
         --bot: #2a2e35;
+        --hover: #262b33;
+        --soon: #f87171;
+        --soon-bg: #3a2222;
+        --badge-bg: #2d3138;
       }
     }
     * { box-sizing: border-box; }
@@ -81,6 +89,53 @@
     .msg.assistant { align-self: flex-start; background: var(--bot); border-bottom-left-radius: 4px; }
     .msg.error { align-self: center; color: #dc2626; font-size: 13px; background: none; }
     .msg.typing { color: var(--muted); }
+    .table-card {
+      align-self: flex-start;
+      flex-shrink: 0; /* 메시지 영역(flex)이 카드를 눌러 행이 잘리지 않게 */
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--panel);
+    }
+    .table-card h2 {
+      font-size: 14px;
+      margin: 0;
+      padding: 10px 14px;
+      background: var(--bot);
+      border-bottom: 1px solid var(--border);
+    }
+    .table-scroll { overflow-x: auto; }
+    .table-card table { border-collapse: collapse; width: 100%; font-size: 14px; }
+    .table-card th, .table-card td {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      white-space: nowrap;
+    }
+    .table-card th { color: var(--muted); font-size: 12px; font-weight: 600; }
+    .table-card .center { text-align: center; }
+    .table-card tbody tr:last-child td { border-bottom: none; }
+    .table-card.clickable tbody tr { cursor: pointer; }
+    .table-card.clickable tbody tr:hover { background: var(--hover); }
+    .table-card .route { font-weight: 700; color: var(--user); }
+    .table-card .soon { color: var(--soon); font-weight: 700; }
+    .badge {
+      display: inline-block;
+      padding: 1px 6px;
+      margin-right: 4px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: var(--badge-bg);
+    }
+    .badge.soon { background: var(--soon-bg); color: var(--soon); }
+    .table-note {
+      padding: 8px 14px;
+      font-size: 12px;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+      white-space: normal;
+    }
     .empty { margin: auto; color: var(--muted); text-align: center; }
     form {
       display: flex;
@@ -146,6 +201,60 @@
       return el;
     }
 
+    function el(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+
+    // 서버가 준 표(render_table 결과)를 그린다. 데이터는 textContent로만 넣는다.
+    function addTable(table) {
+      emptyEl.style.display = "none";
+      const card = el("div", "table-card" + (table.kind === "stations" ? " clickable" : ""));
+      card.appendChild(el("h2", "", table.title));
+
+      const wrap = el("div", "table-scroll");
+      const tbl = el("table");
+      const headRow = el("tr");
+      table.columns.forEach((c) => headRow.appendChild(el("th", c.align === "center" ? "center" : "", c.label)));
+      tbl.appendChild(el("thead")).appendChild(headRow);
+
+      const body = el("tbody");
+      table.rows.forEach((row) => {
+        const tr = el("tr");
+        table.columns.forEach((c) => {
+          const td = el("td", c.align === "center" ? "center" : "");
+          const value = row[c.key] ?? "";
+          if (table.kind === "arrivals" && c.key === "route") {
+            td.className = "route";
+            td.textContent = value;
+          } else if (table.kind === "arrivals" && c.key === "first" && row.minutes !== null && row.minutes <= 2) {
+            td.appendChild(el("span", "badge soon", "곧 도착"));
+            td.appendChild(el("span", "soon", value));
+          } else if (table.kind === "arrivals" && c.key === "info") {
+            String(value).split(" · ").filter(Boolean).forEach((t) => td.appendChild(el("span", "badge", t)));
+          } else {
+            td.textContent = value;
+          }
+          tr.appendChild(td);
+        });
+        if (table.kind === "stations") {
+          tr.title = row.no + "번 정류소 고르기";
+          tr.addEventListener("click", () => {
+            if (!sendBtn.disabled) send(row.no + "번");
+          });
+        }
+        body.appendChild(tr);
+      });
+      tbl.appendChild(body);
+      wrap.appendChild(tbl);
+      card.appendChild(wrap);
+      if (table.note) card.appendChild(el("div", "table-note", table.note));
+      messagesEl.appendChild(card);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
     async function send(text) {
       addMessage("user", text);
       sendBtn.disabled = true;
@@ -160,7 +269,11 @@
         const data = await res.json();
         typing.remove();
         addMessage("assistant", data.reply);
-        history.push({ role: "user", content: text }, { role: "assistant", content: data.reply });
+        const tables = data.tables || [];
+        tables.forEach(addTable);
+        // 다음 질문에서 "4번"처럼 고를 수 있게 표의 평문(정류소 ID 포함)도 대화 기록에 남긴다
+        const content = [data.reply, ...tables.map((t) => t.title + "\n" + t.text)].join("\n\n");
+        history.push({ role: "user", content: text }, { role: "assistant", content });
       } catch (err) {
         typing.remove();
         addMessage("error", "응답을 받지 못했습니다: " + err.message);
@@ -193,7 +306,7 @@
 
     document.getElementById("reset").addEventListener("click", () => {
       history = [];
-      messagesEl.querySelectorAll(".msg").forEach((el) => el.remove());
+      messagesEl.querySelectorAll(".msg, .table-card").forEach((el) => el.remove());
       emptyEl.style.display = "";
       input.focus();
     });
