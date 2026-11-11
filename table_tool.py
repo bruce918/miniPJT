@@ -150,4 +150,8 @@ def render_table(
         table = stations_table(title, data)
         return f"정류소 {len(table['rows'])}곳을 표로 화면에 보여 줬습니다. 답변에서 목록을 다시 나열하지 마세요.", table
     table = arrivals_table(title, data)
-    return f"노선 {len(table['rows'])}개 도착 정보를 표로 화면에 보여 줬습니다. 답변에서 표 내용을 반복하지 마세요.", table
+    # 요약할 때 모델이 순서를 직접 비교하지 않도록, 이미 정렬된 앞쪽 노선을 그대로 알려 준다
+    first = [f"{r['route']}번 {r['first']}" for r in table["rows"][:3]]
+    order = ", ".join(first) if first else "없음"
+    return (f"노선 {len(table['rows'])}개 도착 정보를 표로 화면에 보여 줬습니다. 답변에서 표 내용을 반복하지 마세요.\n"
+            f"도착이 빠른 순서(이 순서 그대로 요약에 쓰세요): {order}"), table

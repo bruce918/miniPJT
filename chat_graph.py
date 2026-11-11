@@ -1,25 +1,37 @@
 """웹 챗봇의 LangGraph 구조.
 
-    START -> classify -+-> bus_arrival  (버스 MCP 도구 + render_table 표 도구를 쓰는 ReAct 에이전트, 서브그래프) -> END
+    START -> classify -+-> bus_arrival  (버스 MCP 도구 + render_table 표 도구를 쓰는 ReAct 에이전트, 서브그래프)
+                       |       -> verify (근거 점검, 규칙 기반) -+-> END
+                       |                                         +-> bus_arrival (어기면 1번만 다시)
                        +-> out_of_scope (지원하지 않는 질문 안내, LLM 호출 없음)        -> END
 
 classify가 질문(과 직전 대화)을 보고 intent를 정하면, 조건부 엣지가 맞는 노드로 보낸다.
 새 기능을 붙일 때는 Intent에 값을 추가하고, 노드를 만들어 ROUTES에 등록하면 된다.
 """
 
+import re
+from dataclasses import dataclass, field
 from typing import Literal
 
-from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, START, MessagesState, StateGraph
 from pydantic import BaseModel, Field
 
-from bus_agent import SYSTEM_PROMPT, build_agent, make_llm
-from table_tool import render_table
+from bus_agent import SYSTEM_PROMPT, build_agent, get_text, make_llm
+from table_tool import fallback_tables, render_table
 
 # 지금은 정류소 도착 문의만 지원한다. 기능이 늘면 여기에 intent를 추가한다.
 Intent = Literal["bus_arrival", "out_of_scope"]
 
 BUS_PROMPT = SYSTEM_PROMPT + """
+
+[근거 규칙 — 가장 중요]
+- 도착 시간·노선·남은 정류장·좌석은 반드시 이번 질문에서 호출한 get_bus_arrival_list(또는 get_bus_arrival_item) 결과로만 말하세요.
+  이전 대화에 있던 숫자를 다시 쓰거나 기억·추측으로 말하면 안 됩니다. 사용자가 후보를 고르기만 해도 도착 정보는 새로 조회하세요.
+- 정류소 ID(9자리)는 search_bus_station 결과나 이전 대화의 후보 목록에 적힌 값만 쓰세요. 절대 짐작해서 만들지 마세요.
+  정류소번호(4~5자리, 예: 7079)는 ID가 아닙니다. 정류소번호만 알면 search_bus_station(name="7079")로 찾으세요.
+- 지명이 경기도 밖(예: 부산역)으로 보여도 스스로 판단하지 말고 search_bus_station으로 먼저 검색한 결과로 답하세요.
+- "가장 먼저 오는 버스"는 도구 결과의 순서(도착이 빠른 순으로 정렬돼 있음)나 render_table이 알려 준 순서를 그대로 쓰세요.
 
 [화면에 표 그리기: render_table — 반드시 지킬 순서]
 이 챗봇 화면은 표로 결과를 보여 줍니다. 아래 두 경우에는 render_table 호출을 절대 빠뜨리지 마세요.
@@ -40,7 +52,7 @@ B. get_bus_arrival_list 결과에 도착 정보가 있는 노선이 1개 이상�
 [웹 챗봇 답변 형식]
 - 일반 텍스트로 짧게 답하세요. 마크다운(**, #, 표)은 쓰지 마세요. 표는 render_table로만 그립니다.
 - 이전 대화에 '번호. 이름 (시군, 정류소번호 N, ID 9자리)' 형식의 후보 목록이 있고 사용자가 번호나 정류소번호로 고르면,
-  다시 검색하지 말고 그 ID로 바로 get_bus_arrival_list를 호출하세요.
+  다시 검색하지 말고 목록에 적힌 그 ID로 바로 get_bus_arrival_list를 호출하세요 (도착 정보는 반드시 새로 조회).
 - 버스와 관계없는 질문에는 경기도 버스 도착 정보만 안내할 수 있다고 답하세요.
 - 질문에 정류소로 볼 만한 단어가 전혀 없을 때만 '정류소 이름을 알려 주세요 (예: 미금역)'라고 물어보세요.
   처음 보는 이름이라도 일단 search_bus_station으로 검색하세요.
@@ -67,6 +79,45 @@ class Classification(BaseModel):
 
 class ChatState(MessagesState):
     intent: Intent
+    retries: int  # verify가 bus_arrival로 되돌려 보낸 횟수
+
+
+# ---------- verify: 근거 점검 (규칙 기반, LLM 없음) ----------
+# 평가(evaluate.py)에서 모델이 도구 없이 도착 시간을 지어내거나, 검색 없이 지식으로 답하는 경우가 나와
+# 답변을 내보내기 전에 규칙으로 한 번 점검하고 어기면 한 번만 다시 시키도록 했다.
+
+ARRIVAL_TOOLS = {"get_bus_arrival_list", "get_bus_arrival_item"}
+DATA_TOOLS = {"search_bus_station", *ARRIVAL_TOOLS}
+MAX_RETRIES = 1
+MINUTES_RE = re.compile(r"\d+\s*분")
+ASK_STATION_RE = re.compile(r"정류(소|장).{0,6}(이름|번호).{0,8}알려")
+UNVERIFIED_REPLY = "도착 정보를 확인하지 못했어요. 잠시 후 다시 물어봐 주세요."
+
+
+def _current_turn(messages):
+    """마지막 사용자(Human) 메시지 뒤의 메시지들 = 이번 시도에서 에이전트가 만든 메시지."""
+    idx = max((i for i, m in enumerate(messages) if isinstance(m, HumanMessage)), default=-1)
+    return messages[idx + 1:]
+
+
+def find_violation(messages) -> str | None:
+    """이번 시도의 답변이 근거 규칙을 어겼으면 이유를, 아니면 None을 돌려준다."""
+    turn = _current_turn(messages)
+    used = {m.name for m in turn if isinstance(m, ToolMessage)}
+    text = next((get_text(m).strip() for m in reversed(turn) if isinstance(m, AIMessage) and get_text(m).strip()), "")
+    if MINUTES_RE.search(text) and not (used & ARRIVAL_TOOLS):
+        return "arrival_without_tool"
+    if not (used & DATA_TOOLS) and not ASK_STATION_RE.search(text):
+        return "answer_without_search"
+    return None
+
+
+CORRECTIONS = {
+    "arrival_without_tool": "[자동 점검] 방금 답변은 이번 질문에서 도착 정보 도구를 호출하지 않고 도착 시간을 말했습니다. "
+                            "정류소 ID를 확인해 get_bus_arrival_list로 새로 조회한 결과로만 다시 답하세요.",
+    "answer_without_search": "[자동 점검] 방금 답변은 도구로 확인하지 않고 답했습니다. "
+                             "정류소 이름이나 번호를 search_bus_station으로 먼저 검색한 결과로 다시 답하세요.",
+}
 
 
 async def build_chat_graph():
@@ -82,14 +133,68 @@ async def build_chat_graph():
     async def out_of_scope(state: ChatState) -> dict:
         return {"messages": [AIMessage(OUT_OF_SCOPE_REPLY)]}
 
+    async def verify(state: ChatState) -> dict:
+        violation = find_violation(state["messages"])
+        retries = state.get("retries", 0)
+        if violation is None:
+            return {}
+        if retries < MAX_RETRIES:
+            print(f"[verify] {violation} -> 에이전트에게 다시 시킵니다")
+            return {"messages": [HumanMessage(CORRECTIONS[violation])], "retries": retries + 1}
+        print(f"[verify] 다시 시켜도 {violation}")
+        if violation == "arrival_without_tool":
+            # 근거 없는 도착 시간은 내보내지 않는다
+            return {"messages": [AIMessage(UNVERIFIED_REPLY)]}
+        return {}  # 검색만 건너뛴 답(예: 경기도 밖 지명 안내)은 위험하지 않아 그대로 둔다
+
+    def after_verify(state: ChatState) -> str:
+        last = state["messages"][-1]
+        return "bus_arrival" if isinstance(last, HumanMessage) else END
+
     ROUTES = {"bus_arrival": "bus_arrival", "out_of_scope": "out_of_scope"}
 
     graph = StateGraph(ChatState)
     graph.add_node("classify", classify)
     graph.add_node("bus_arrival", bus_agent)  # 컴파일된 ReAct 에이전트를 서브그래프 노드로 사용 (messages 키 공유)
+    graph.add_node("verify", verify)
     graph.add_node("out_of_scope", out_of_scope)
     graph.add_edge(START, "classify")
     graph.add_conditional_edges("classify", lambda s: s["intent"], ROUTES)
-    graph.add_edge("bus_arrival", END)
+    graph.add_edge("bus_arrival", "verify")
+    graph.add_conditional_edges("verify", after_verify, {"bus_arrival": "bus_arrival", END: END})
     graph.add_edge("out_of_scope", END)
     return graph.compile()
+
+
+KEEP_LAST_MESSAGES = 6  # 그래프에 보내는 이전 대화 상한 (토큰 절약)
+
+
+@dataclass
+class ChatTurn:
+    """한 턴의 결과. 웹 API(main.py)와 평가 스크립트(evaluate.py)가 같이 쓴다."""
+    reply: str
+    intent: str | None
+    tables: list[dict]
+    messages: list = field(default_factory=list)  # 이번 턴에 새로 생긴 메시지 (도구 호출·결과 포함)
+
+
+async def run_chat(graph, message: str, history: list[tuple[str, str]]) -> ChatTurn:
+    """사용자 메시지 하나를 그래프에 넣고 답변·표를 꺼낸다. history는 (role, content) 목록."""
+    # 브라우저가 보내 준 대화 기록으로 맥락(후보 정류소 번호 선택 등)을 이어간다
+    recent = [(r, c) for r, c in history if r in ("user", "assistant") and c][-KEEP_LAST_MESSAGES:]
+    while recent and recent[0][0] != "user":
+        recent.pop(0)
+    inputs = recent + [("user", message)]
+
+    result = await graph.ainvoke({"messages": inputs}, {"recursion_limit": 20})
+    turn = result["messages"][len(inputs):]
+    # 모델이 render_table 호출과 함께 답을 먼저 쓰고 마지막 메시지를 비우는 경우가 있어,
+    # 마지막 메시지가 비면 이번 턴의 가장 최근 AI 텍스트를 쓴다.
+    ai_texts = [get_text(m).strip() for m in turn if isinstance(m, AIMessage)]
+    reply = next((t for t in reversed(ai_texts) if t), "") or "답변을 만들지 못했습니다."
+    tables = [m.artifact for m in turn if isinstance(m, ToolMessage) and m.name == "render_table" and m.artifact]
+    if not tables:
+        tables = fallback_tables(turn)
+        if tables:
+            print(f"[안전망] 모델이 render_table을 호출하지 않아 서버가 표를 만들었습니다: {tables[0]['kind']}")
+    return ChatTurn(reply=reply, intent=result.get("intent"), tables=tables, messages=turn)

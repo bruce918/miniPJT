@@ -56,6 +56,27 @@ def _dump(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))   # 들여쓰기 없이 한 줄로
 
 
+def _minutes(v) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 9999
+
+
+_station_ids: set | None = None
+
+
+def _known_station(station_id: str) -> bool | None:
+    """정류소 ID가 정류소 목록에 있는지. 목록 파일이 없으면 None(확인 불가)."""
+    global _station_ids
+    try:
+        if _station_ids is None:
+            _station_ids = {s["id"] for s in _stations()}
+    except OSError:
+        return None
+    return station_id in _station_ids
+
+
 def _call(operation: str, **params) -> str:
     """공공데이터포털을 호출해 사람이 읽을 수 있는 문장으로 돌려줍니다. 예외를 던지지 않습니다."""
     key = os.getenv("DATA_GO_KR_KEY")
@@ -83,10 +104,15 @@ def _call(operation: str, **params) -> str:
     rows = next((v for v in body.values() if isinstance(v, list)), None)
     if rows is None:   # 항목조회는 목록이 아니라 객체 1건으로 옵니다
         return _dump(_slim(next(iter(body.values()))))
-    # 도착 정보가 있는 노선만 자세히, 없는 노선은 이름만 모아서 토큰을 아낍니다
-    live = [_slim(r) for r in rows if r.get("predictTime1") not in ("", None)]
+    # 도착 정보가 있는 노선만 자세히, 없는 노선은 이름만 모아서 토큰을 아낍니다.
+    # 모델이 "가장 먼저 오는 버스"를 직접 비교하다 틀리지 않도록 도착이 빠른 순으로 정렬해 둡니다.
+    live = sorted(
+        (_slim(r) for r in rows if r.get("predictTime1") not in ("", None)),
+        key=lambda r: (_minutes(r.get("predictTime1")), _minutes(r.get("locationNo1"))),
+    )
     idle = [str(r.get("routeName")) for r in rows if r.get("predictTime1") in ("", None)]
-    result = {"도착정보_있는_노선": live[:MAX_ROWS]}
+    result = {"정렬": "도착정보_있는_노선은 도착이 빠른 순서입니다 (첫 항목이 가장 먼저 옴)",
+              "도착정보_있는_노선": live[:MAX_ROWS]}
     if idle:
         result["도착정보_없는_노선"] = idle
     return _dump(result)
@@ -94,10 +120,10 @@ def _call(operation: str, **params) -> str:
 
 @mcp.tool()
 def search_bus_station(name: str, city: str = "") -> str:
-    """정류소 이름으로 정류소 ID(stationId)를 찾는다. 같은 이름이 여러 개면 방향별 정류소다.
+    """정류소 이름이나 정류소번호로 정류소 ID(stationId)를 찾는다. 같은 이름이 여러 개면 방향별 정류소다.
 
     Args:
-        name: 정류소 이름 또는 일부 (예: '미금역')
+        name: 정류소 이름 또는 일부 (예: '미금역'), 또는 정류소 표지판의 정류소번호 숫자 (예: '7079')
         city: 시군으로 좁힐 때 (예: '성남시'). 비우면 전체
     """
     name = name.strip()
@@ -107,6 +133,12 @@ def search_bus_station(name: str, city: str = "") -> str:
         pool = [s for s in _stations() if not city or city in s["city"]]
     except OSError:
         return "정류소 데이터(gg_stations.json)가 없습니다. make_stations.py로 먼저 만들어 주세요."
+    if name.isdigit():
+        # 숫자만 오면 정류소번호(mobile)로 찾는다. 정류소번호는 시군 간에 겹칠 수 있어 여러 건일 수 있다.
+        hits = [s for s in pool if s["mobile"] == name] or [s for s in pool if s["id"] == name]
+        if not hits:
+            return f"정류소번호 '{name}'인 정류소를 찾지 못했습니다. 경기도 내 정류소만 조회할 수 있습니다."
+        return _dump(hits[:MAX_STATIONS])
     # 이름이 정확히 같은 것 -> 이름으로 시작하는 것 -> 이름이 포함된 것 순으로 보여 줍니다
     exact = [s for s in pool if s["name"] == name]
     starts = [s for s in pool if s["name"].startswith(name) and s["name"] != name]
@@ -121,11 +153,16 @@ def search_bus_station(name: str, city: str = "") -> str:
 
 @mcp.tool()
 def get_bus_arrival_list(station_id: str) -> str:
-    """정류소의 버스 도착 목록. predictTime1/2는 도착까지 분(빈 값은 정보 없음), locationNo는 몇 정류장 전, remainSeatCnt는 빈 좌석. 한 노선만 필요하면 get_bus_arrival_item.
+    """정류소의 버스 도착 목록 (도착이 빠른 순). predictTime1/2는 도착까지 분, locationNo는 몇 정류장 전, remainSeatCnt는 빈 좌석. 한 노선만 필요하면 get_bus_arrival_item.
 
     Args:
-        station_id: 정류소 ID (숫자 9자리)
+        station_id: 정류소 ID (숫자 9자리). search_bus_station 결과나 이전 후보 목록에 나온 ID만 쓴다. 짐작하지 말 것
     """
+    station_id = station_id.strip()
+    if _known_station(station_id) is False:
+        # 모델이 정류소번호(4~5자리) 등으로 ID를 짐작해 부르면 API를 부르지 않고 바로 알려 준다
+        return (f"'{station_id}'는 정류소 목록에 없는 정류소 ID입니다. ID를 짐작하지 말고 "
+                "search_bus_station으로 정류소 이름이나 정류소번호를 검색해 ID를 확인하세요.")
     return _call("getBusArrivalListv2", stationId=station_id)
 
 

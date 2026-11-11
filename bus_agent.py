@@ -57,10 +57,10 @@ async def build_agent(prompt: str = SYSTEM_PROMPT, extra_tools=(), **agent_kwarg
     return create_react_agent(make_llm(), tools, prompt=prompt, **agent_kwargs), tools
 
 
-def make_llm(max_tokens: int = 600) -> ChatBedrockConverse:
-    """Bedrock Claude 모델. 에이전트와 분류기(chat_graph.classify)가 같이 씁니다."""
+def make_llm(max_tokens: int = 600, model_id: str | None = None) -> ChatBedrockConverse:
+    """Bedrock Claude 모델. 에이전트·분류기(chat_graph.classify)·평가 판사(evaluate.py)가 같이 씁니다."""
     return ChatBedrockConverse(
-        model=BUS_MODEL_ID,
+        model=model_id or BUS_MODEL_ID,
         region_name="us-east-1",
         max_tokens=max_tokens,   # 답변이 길어지지 않게 출력 상한을 둡니다
         # 한도 초과(ThrottlingException)에는 간격을 늘려 재시도합니다

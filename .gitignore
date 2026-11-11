@@ -8,3 +8,5 @@ __pycache__/
 skills-lock.json
 # archify 다이어그램 결과물
 .archify/
+# 평가 실행 결과 (evaluate.py)
+eval_results/

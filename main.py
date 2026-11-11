@@ -16,16 +16,11 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
-from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import BaseModel
 
-from bus_agent import get_text
-from chat_graph import build_chat_graph
-from table_tool import fallback_tables
+from chat_graph import build_chat_graph, run_chat
 
 BASE_DIR = Path(__file__).parent
-
-KEEP_LAST_MESSAGES = 6  # 그래프에 보내는 이전 대화 상한 (토큰 절약)
 
 
 class Message(BaseModel):
@@ -76,28 +71,12 @@ async def generate_reply(message: str, history: list[Message]) -> ChatResponse:
     except RuntimeError as e:
         return ChatResponse(reply=str(e))
 
-    # 브라우저가 보내 준 대화 기록으로 맥락(후보 정류소 번호 선택 등)을 이어간다
-    recent = [m for m in history if m.role in ("user", "assistant") and m.content][-KEEP_LAST_MESSAGES:]
-    while recent and recent[0].role != "user":
-        recent.pop(0)
-    messages = [(m.role, m.content) for m in recent] + [("user", message)]
-
     try:
-        result = await graph.ainvoke({"messages": messages}, {"recursion_limit": 20})
+        turn = await run_chat(graph, message, [(m.role, m.content) for m in history])
     except Exception as e:
         print(f"그래프 오류: {type(e).__name__}: {e}")
         return ChatResponse(reply=f"조회 중 오류가 났습니다 ({type(e).__name__}). 잠시 후 다시 시도해 주세요.")
-    turn = result["messages"][len(messages):]  # 이번 턴에 새로 생긴 메시지 (입력으로 보낸 메시지 뒤쪽)
-    # 모델이 render_table 호출과 함께 답을 먼저 쓰고 마지막 메시지를 비우는 경우가 있어,
-    # 마지막 메시지가 비면 이번 턴의 가장 최근 AI 텍스트를 쓴다.
-    ai_texts = [get_text(m).strip() for m in turn if isinstance(m, AIMessage)]
-    reply = next((t for t in reversed(ai_texts) if t), "") or "답변을 만들지 못했습니다."
-    tables = [m.artifact for m in turn if isinstance(m, ToolMessage) and m.name == "render_table" and m.artifact]
-    if not tables:
-        tables = fallback_tables(turn)
-        if tables:
-            print(f"[안전망] 모델이 render_table을 호출하지 않아 서버가 표를 만들었습니다: {tables[0]['kind']}")
-    return ChatResponse(reply=reply, intent=result.get("intent"), tables=tables)
+    return ChatResponse(reply=turn.reply, intent=turn.intent, tables=turn.tables)
 
 
 @app.get("/")
