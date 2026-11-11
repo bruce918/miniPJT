@@ -1,4 +1,10 @@
+.env
 .venv/
 __pycache__/
 *.pyc
-.env
+.vscode/
+# Claude Code 로컬 스킬 설치물 (archify 등)
+.claude/
+skills-lock.json
+# archify 다이어그램 결과물
+.archify/
