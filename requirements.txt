@@ -5,9 +5,9 @@ uvicorn[standard]>=0.30
 python-dotenv
 httpx
 requests
-fastmcp
+fastmcp>=3,<4          # fastmcp 4.x는 mcp 2.x 필요 -> langchain-mcp-adapters(mcp<2)와 충돌
 langchain-core
 langchain-aws
-langchain-mcp-adapters
+langchain-mcp-adapters>=0.3.2
 langgraph
 botocore
