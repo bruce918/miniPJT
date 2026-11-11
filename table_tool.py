@@ -11,6 +11,7 @@
 """
 
 import json
+import re
 from typing import Annotated, Literal
 
 from langchain_core.messages import ToolMessage
@@ -43,6 +44,15 @@ def _latest_result(messages, tool_name: str):
     return None
 
 
+def _search_total(messages) -> int | None:
+    """search_bus_station 결과 앞의 '(총 N건 중 10건)'에서 전체 건수 N을 꺼낸다."""
+    for m in reversed(messages):
+        if isinstance(m, ToolMessage) and m.name == SOURCE_TOOL["stations"]:
+            found = re.match(r"\(총 (\d+)건", _text(m.content).strip())
+            return int(found.group(1)) if found else None
+    return None
+
+
 def _num(v):
     try:
         return int(v)
@@ -50,7 +60,7 @@ def _num(v):
         return None
 
 
-def stations_table(title: str, stations: list[dict]) -> dict:
+def stations_table(title: str, stations: list[dict], total: int | None = None) -> dict:
     rows = [
         {"no": i, "name": s["name"], "city": s.get("city", ""), "mobile": s.get("mobile", ""), "id": s["id"]}
         for i, s in enumerate(stations, 1)
@@ -67,7 +77,8 @@ def stations_table(title: str, stations: list[dict]) -> dict:
             {"key": "id", "label": "정류소 ID", "align": "center"},
         ],
         "rows": rows,
-        "note": "행을 누르면 그 정류소를 고릅니다.",
+        "note": (f"총 {total}곳 중 {len(rows)}곳만 보여 드려요. 원하는 곳이 없으면 이름을 더 자세히 입력해 주세요. " if total and total > len(rows) else "")
+                + "행을 누르면 그 정류소를 고릅니다.",
         "text": text,
     }
 
@@ -147,8 +158,9 @@ def render_table(
     if not data:
         return f"표를 그릴 데이터가 없습니다. 먼저 {SOURCE_TOOL[kind]}를 호출해 결과를 받은 뒤 다시 호출하세요.", None
     if kind == "stations":
-        table = stations_table(title, data)
-        return f"정류소 {len(table['rows'])}곳을 표로 화면에 보여 줬습니다. 답변에서 목록을 다시 나열하지 마세요.", table
+        table = stations_table(title, data, _search_total(state["messages"]))
+        return (f"정류소 {len(table['rows'])}곳을 표로 화면에 보여 줬습니다. 답변에서 목록을 다시 나열하지 마세요. "
+                f"답변의 개수는 표에 보이는 {len(table['rows'])}곳으로 말하세요."), table
     table = arrivals_table(title, data)
     # 요약할 때 모델이 순서를 직접 비교하지 않도록, 이미 정렬된 앞쪽 노선을 그대로 알려 준다
     first = [f"{r['route']}번 {r['first']}" for r in table["rows"][:3]]

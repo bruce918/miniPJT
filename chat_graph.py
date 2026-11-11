@@ -31,6 +31,9 @@ BUS_PROMPT = SYSTEM_PROMPT + """
 - 정류소 ID(9자리)는 search_bus_station 결과나 이전 대화의 후보 목록에 적힌 값만 쓰세요. 절대 짐작해서 만들지 마세요.
   정류소번호(4~5자리, 예: 7079)는 ID가 아닙니다. 정류소번호만 알면 search_bus_station(name="7079")로 찾으세요.
 - 지명이 경기도 밖(예: 부산역)으로 보여도 스스로 판단하지 말고 search_bus_station으로 먼저 검색한 결과로 답하세요.
+- 검색 결과가 1건 이상이면 시군이 서울특별시 등 경기도 밖이어도 정상 결과입니다 (경기도 버스가 지나가는 정류소).
+  이때는 "경기도 내 정류소만 조회할 수 있다"는 안내를 절대 하지 말고 결과를 그대로 보여 주세요.
+  경기도 안내는 검색 결과가 0건일 때만 합니다.
 - "가장 먼저 오는 버스"는 도구 결과의 순서(도착이 빠른 순으로 정렬돼 있음)나 render_table이 알려 준 순서를 그대로 쓰세요.
 
 [화면에 표 그리기: render_table — 반드시 지킬 순서]
@@ -92,12 +95,22 @@ MAX_RETRIES = 1
 MINUTES_RE = re.compile(r"\d+\s*분")
 ASK_STATION_RE = re.compile(r"정류(소|장).{0,6}(이름|번호).{0,8}알려")
 UNVERIFIED_REPLY = "도착 정보를 확인하지 못했어요. 잠시 후 다시 물어봐 주세요."
+# "경기도 버스 도착 정보만", "경기도 내 정류소만", "경기도 ... 범위를 벗어나" 같은 범위 밖 안내
+GYEONGGI_ONLY_RE = re.compile(r"경기도.{0,20}(만\s|만$|만[.,]|밖|범위|벗어)")
 
 
 def _current_turn(messages):
     """마지막 사용자(Human) 메시지 뒤의 메시지들 = 이번 시도에서 에이전트가 만든 메시지."""
     idx = max((i for i, m in enumerate(messages) if isinstance(m, HumanMessage)), default=-1)
     return messages[idx + 1:]
+
+
+def _station_hits(turn) -> int:
+    """이번 시도에서 search_bus_station이 찾은 정류소 수 (가장 최근 검색 기준)."""
+    for m in reversed(turn):
+        if isinstance(m, ToolMessage) and m.name == "search_bus_station":
+            return get_text(m).count('"id":')
+    return 0
 
 
 def find_violation(messages) -> str | None:
@@ -107,6 +120,8 @@ def find_violation(messages) -> str | None:
     text = next((get_text(m).strip() for m in reversed(turn) if isinstance(m, AIMessage) and get_text(m).strip()), "")
     if MINUTES_RE.search(text) and not (used & ARRIVAL_TOOLS):
         return "arrival_without_tool"
+    if _station_hits(turn) and GYEONGGI_ONLY_RE.search(text):
+        return "gyeonggi_notice_with_results"
     if not (used & DATA_TOOLS) and not ASK_STATION_RE.search(text):
         return "answer_without_search"
     return None
@@ -117,6 +132,9 @@ CORRECTIONS = {
                             "정류소 ID를 확인해 get_bus_arrival_list로 새로 조회한 결과로만 다시 답하세요.",
     "answer_without_search": "[자동 점검] 방금 답변은 도구로 확인하지 않고 답했습니다. "
                              "정류소 이름이나 번호를 search_bus_station으로 먼저 검색한 결과로 다시 답하세요.",
+    "gyeonggi_notice_with_results": "[자동 점검] 검색 결과가 있는데 경기도 내 정류소만 조회할 수 있다고 안내했습니다. "
+                                    "시군과 관계없이 검색 결과는 정상입니다. 안내 문구 없이 규칙대로 결과를 보여 주세요 "
+                                    "(2곳 이상이면 후보 표, 1곳이면 도착 정보 조회).",
 }
 
 
@@ -145,6 +163,10 @@ async def build_chat_graph():
         if violation == "arrival_without_tool":
             # 근거 없는 도착 시간은 내보내지 않는다
             return {"messages": [AIMessage(UNVERIFIED_REPLY)]}
+        hits = _station_hits(_current_turn(state["messages"]))
+        if violation == "gyeonggi_notice_with_results" and hits >= 2:
+            # 검색 결과가 있으니 안내 문구 대신 후보 안내로 바꾼다 (표는 run_chat의 안전망이 그린다)
+            return {"messages": [AIMessage(f"{hits}곳이 있어요. 표에서 번호를 골라 주세요.")]}
         return {}  # 검색만 건너뛴 답(예: 경기도 밖 지명 안내)은 위험하지 않아 그대로 둔다
 
     def after_verify(state: ChatState) -> str:

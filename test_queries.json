@@ -100,6 +100,28 @@
       }
     },
     {
+      "id": "in-07",
+      "category": "in",
+      "note": "경기도 버스가 지나는 서울 정류소(강남역)는 결과가 있으니 경기도 안내 없이 후보 표",
+      "message": "강남역 버스 언제 와?",
+      "expect": {
+        "intent": "bus_arrival",
+        "table": "stations",
+        "not_regex": "경기도.{0,20}(만|밖|범위|벗어)"
+      }
+    },
+    {
+      "id": "in-08",
+      "category": "in",
+      "note": "서울역도 결과가 있으니 경기도 안내 없이 후보 표, 답변 개수는 표에 보이는 개수",
+      "message": "서울역 버스 언제 와?",
+      "expect": {
+        "intent": "bus_arrival",
+        "table": "stations",
+        "not_regex": "경기도.{0,20}(만|밖|범위|벗어)|13곳"
+      }
+    },
+    {
       "id": "out-01",
       "category": "out",
       "note": "없는 정류소는 지어내지 않고 못 찾았다고 안내 + 경기도 정류소만 입력하라고 안내",
