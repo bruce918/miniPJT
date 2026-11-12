@@ -285,7 +285,9 @@ def _trace_inputs(inputs: dict) -> dict:
             "last_assistant": next((c for r, c in reversed(history) if r == "assistant"), None)}
 
 
-def _trace_outputs(turn: "ChatTurn") -> dict:
+def _trace_outputs(turn: "ChatTurn | None") -> dict:
+    if not isinstance(turn, ChatTurn):  # 실행이 예외로 끝나면 출력이 없다 (오류는 LangSmith가 따로 기록)
+        return {}
     return {"reply": turn.reply, "intent": turn.intent,
             "tables": [t.get("kind") for t in turn.tables],
             "sources": [s["citation"] for s in turn.sources]}

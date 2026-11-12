@@ -39,6 +39,10 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
+
+# 평가는 사람이 기다리지 않으므로 분당 한도 초과에 더 오래 재시도한다 (bus_agent.make_llm이 읽음)
+os.environ.setdefault("BEDROCK_MAX_ATTEMPTS", "8")
+
 from langchain_aws import BedrockEmbeddings
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate

@@ -16,7 +16,11 @@ import asyncio
 import json
 import sys
 from datetime import datetime
+import os
 from pathlib import Path
+
+# 평가는 사람이 기다리지 않으므로 분당 한도 초과에 더 오래 재시도한다 (bus_agent.make_llm이 읽음)
+os.environ.setdefault("BEDROCK_MAX_ATTEMPTS", "8")
 
 from observability import eval_tracing
 from rag import Retriever, RetrievalConfig

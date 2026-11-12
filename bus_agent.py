@@ -63,8 +63,9 @@ def make_llm(max_tokens: int = 600, model_id: str | None = None) -> ChatBedrockC
         model=model_id or BUS_MODEL_ID,
         region_name="us-east-1",
         max_tokens=max_tokens,   # 답변이 길어지지 않게 출력 상한을 둡니다
-        # 한도 초과(ThrottlingException)에는 간격을 늘려 재시도합니다
-        config=Config(retries={"max_attempts": 8, "mode": "adaptive"}),
+        # 한도 초과(ThrottlingException)에는 간격을 늘려 재시도합니다.
+        # 채팅은 사용자가 기다리므로 기본 3번(일일 한도 초과면 재시도해도 소용없음), 평가 스크립트는 8번으로 올려 씁니다.
+        config=Config(retries={"max_attempts": int(os.getenv("BEDROCK_MAX_ATTEMPTS", "3")), "mode": "adaptive"}),
     )
 
 

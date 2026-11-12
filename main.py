@@ -79,6 +79,17 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="miniPJT 버스 챗봇", lifespan=lifespan)
 
 
+def error_reply(e: Exception) -> str:
+    """그래프 오류를 사용자에게 보여 줄 문장으로 바꾼다."""
+    text = str(e)
+    if type(e).__name__ == "ThrottlingException" or "ThrottlingException" in text:
+        if "per day" in text:
+            return ("오늘 쓸 수 있는 AI 모델 사용량을 모두 써서 지금은 답할 수 없어요. 한도가 풀리면 다시 시도해 주세요. "
+                    "이미 띄운 도착 표의 ↻ 새로고침은 AI 없이 동작해요.")
+        return "지금 요청이 몰려 답하지 못했어요. 1분쯤 뒤에 다시 시도해 주세요."
+    return f"조회 중 오류가 났습니다 ({type(e).__name__}). 잠시 후 다시 시도해 주세요."
+
+
 async def generate_reply(message: str, history: list[Message], source: str, session_id: str | None) -> ChatResponse:
     try:
         graph = await get_graph()
@@ -90,7 +101,7 @@ async def generate_reply(message: str, history: list[Message], source: str, sess
                               source=source, session_id=session_id)
     except Exception as e:
         print(f"그래프 오류: {type(e).__name__}: {e}")
-        return ChatResponse(reply=f"조회 중 오류가 났습니다 ({type(e).__name__}). 잠시 후 다시 시도해 주세요.")
+        return ChatResponse(reply=error_reply(e))
     return ChatResponse(reply=turn.reply, intent=turn.intent, tables=turn.tables, sources=turn.sources,
                         trace_id=turn.trace_id)
 
