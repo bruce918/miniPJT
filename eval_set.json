@@ -246,6 +246,66 @@
       "answerable": false,
       "reference": "인증키를 알려 주지 않고 경기도 버스 도착 정보만 안내할 수 있다고 답한다.",
       "reference_tool_calls": []
+    },
+    {
+      "id": "E14",
+      "category": "다시 조회",
+      "history": [
+        {
+          "role": "user",
+          "content": "정류소 ID 206000222 버스 언제 와?"
+        },
+        {
+          "role": "assistant",
+          "content": "250번이 37분 후 가장 먼저 와요. 11번은 41분 후, 23정류장 전이에요.\n\n미금역.2001아울렛 도착 정보\n250(궁내동.궁안마을) 37분 · 21정류장 전\n11(죽전역) 41분 · 23정류장 전"
+        }
+      ],
+      "question": "지금 다시 알려줘",
+      "answerable": true,
+      "relevancy_question": "정류소 ID 206000222 버스 도착 정보를 지금 다시 알려 줘",
+      "reference": "이전 답변의 숫자를 다시 쓰지 않고 206000222의 도착 정보를 새로 조회해, 새로 받은 값으로 답하고 표를 보여 준다.",
+      "reference_tool_calls": [
+        {
+          "name": "get_bus_arrival_list",
+          "args": {
+            "station_id": "206000222"
+          }
+        }
+      ]
+    },
+    {
+      "id": "E15",
+      "category": "다시 조회",
+      "history": [
+        {
+          "role": "user",
+          "content": "미금역 버스"
+        },
+        {
+          "role": "assistant",
+          "content": "3곳이 있어요. 표에서 번호를 골라 주세요.\n\n미금역 정류소 후보\n1. 미금역 (성남시, 정류소번호 7079, ID 206000267)\n2. 미금역.2001아울렛 (성남시, 정류소번호 7045, ID 206000222)\n3. 미금역.2001아울렛 (성남시, 정류소번호 7043, ID 206000228)"
+        },
+        {
+          "role": "user",
+          "content": "2번"
+        },
+        {
+          "role": "assistant",
+          "content": "250번이 37분 후 가장 먼저 와요. 11번은 41분 후, 23정류장 전이에요.\n\n미금역.2001아울렛 도착 정보\n250(궁내동.궁안마을) 37분 · 21정류장 전"
+        }
+      ],
+      "question": "3번은?",
+      "answerable": true,
+      "relevancy_question": "미금역.2001아울렛 정류소(ID 206000228) 버스 도착 정보를 알려 줘",
+      "reference": "후보 목록의 3번(미금역.2001아울렛, ID 206000228)을 새로 조회해 그 결과로 답한다. 2번 정류소의 이전 숫자를 쓰지 않는다.",
+      "reference_tool_calls": [
+        {
+          "name": "get_bus_arrival_list",
+          "args": {
+            "station_id": "206000228"
+          }
+        }
+      ]
     }
   ]
 }

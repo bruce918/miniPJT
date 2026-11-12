@@ -1,4 +1,9 @@
-"""자체 평가 세트(eval_set.json)로 챗봇을 평가한다: RAGAS 방식 지표 + LLM-as-Judge.
+"""자체 평가 세트(eval_set.json)로 챗봇을 평가한다: 정류소·도착 값 대조(우선) + RAGAS 방식 지표 + LLM-as-Judge.
+
+우선 지표 (규칙 기반, grounding_check.py) — 판사 오판에 흔들리지 않으므로 이 두 값을 먼저 본다
+  station_match       고른/기대한 정류소 ID를 실제로 조회했는가 (0/1)
+  arrival_values      답변·표의 노선·N분·M정류장 전이 같은 응답의 API 원본 값과 같은 비율.
+                      같은 턴 앞선 조회 값·이전 대화 값을 다시 쓴 경우를 따로 표시한다.
 
 ragas 라이브러리(0.4.x)는 현재 langchain 1.x 스택과 맞지 않아(langchain_community.vertexai 제거)
 지표 정의를 그대로 따라 직접 구현했다.
@@ -41,6 +46,7 @@ from pydantic import BaseModel, Field
 
 from bus_agent import BUS_MODEL_ID, get_text, make_llm
 from chat_graph import build_chat_graph, run_chat
+from grounding_check import grounding
 from observability import eval_tracing
 
 load_dotenv()
@@ -53,6 +59,9 @@ DATA_TOOLS = {"search_bus_station", "get_bus_arrival_list", "get_bus_arrival_ite
 
 # 완성 기준 (SERVICE.md 5절)
 TARGETS = {
+    # 우선 지표: 규칙 기반이라 오판이 없으므로 전부 맞아야 한다
+    "station_match": 1.0,
+    "arrival_values": 1.0,
     "faithfulness": 0.90,
     # Titan v2 한국어 기준선(2026-11-11 측정): 같은 뜻 문장쌍 0.55~0.70, 다른 질문·무관 0.0~0.32 -> 그 사이로 둔다
     "answer_relevancy": 0.50,
@@ -303,6 +312,7 @@ async def evaluate_sample(graph, ev: Evaluator, sample: dict) -> dict:
         ev.goal_accuracy(transcript, sample["reference"]),
         ev.judge(transcript, sample["reference"]),
     )
+    g = grounding(sample, turn)
     return {
         "id": sample["id"],
         "category": sample["category"],
@@ -311,6 +321,8 @@ async def evaluate_sample(graph, ev: Evaluator, sample: dict) -> dict:
         "tables": [t["kind"] for t in turn.tables],
         "tool_calls": predicted,
         "metrics": {
+            "station_match": g["station_match"],
+            "arrival_values": g["arrival_values"],
             "faithfulness": faith,
             "answer_relevancy": relev,
             "tool_call_accuracy": tool_call_accuracy(predicted, sample.get("reference_tool_calls", [])),
@@ -351,13 +363,13 @@ def _fmt(v, key=None) -> str:
 
 
 def report_markdown(results: list[dict], summary: dict, meta: dict) -> str:
-    names = {"faithfulness": "Faithfulness", "answer_relevancy": "Answer Relevancy",
+    names = {"station_match": "정류소 일치", "arrival_values": "도착 값 일치", "faithfulness": "Faithfulness", "answer_relevancy": "Answer Relevancy",
              "tool_call_accuracy": "Tool Call Accuracy", "goal_accuracy": "Goal Accuracy", "judge_score": "Judge (1~5)"}
     out = [f"# 평가 결과 · {meta['started']}", "",
            f"- 에이전트 모델: `{meta['agent_model']}` · 판사 모델: `{meta['judge_model']}` · 임베딩: `{meta['embed_model']}`",
            f"- 실행 {len(results)}건 (샘플마다 {meta['repeat']}회), 판사 pass {summary['judge_pass_rate']:.0%}",
-           "- 판사 모델이 에이전트와 같으면 자기 채점 편향이 있다. Judge 점수는 참고용으로 보고, "
-           "Faithfulness·Tool Call Accuracy(규칙 기반)를 함께 볼 것", "",
+           "- **정류소 일치·도착 값 일치(규칙 기반 대조)를 먼저 본다.** 판사(LLM)는 오판이 있어 Judge·Goal 점수는 참고용",
+           "- 도착 값은 같은 응답의 API 원본 값(마지막 조회)과 대조한다. 앞선 조회 값·이전 대화 값을 쓰면 실패로 센다", "",
            "## 지표 요약", "", "| 지표 | 점수 | 목표 | 판정 |", "|---|---|---|---|"]
     for k, target in TARGETS.items():
         v = summary["overall"][k]
@@ -367,13 +379,30 @@ def report_markdown(results: list[dict], summary: dict, meta: dict) -> str:
             "|---|" + "---|" * len(TARGETS)]
     for c, vals in summary["by_category"].items():
         out.append(f"| {c} | " + " | ".join(_fmt(vals[k], k) for k in TARGETS) + " |")
-    out += ["", "## 샘플별", "", "| ID | 유형 | Faith | Relev | Tool | Goal | Judge | 판정 | 판사 의견 |",
-            "|---|---|---|---|---|---|---|---|---|"]
+    out += ["", "## 샘플별", "", "| ID | 유형 | 정류소 | 도착값 | Faith | Relev | Tool | Goal | Judge | 판정 | 판사 의견 |",
+            "|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in results:
         j = r["metrics"]["judge"]
         out.append(f"| {r['id']} | {r['category']} | " + " | ".join(
             _fmt(_score(r, k), k) for k in TARGETS) + f" | {j['verdict']} | {j['reason'].replace('|', '/')} |")
-    out += ["", "## 감점 상세", ""]
+    out += ["", "## 정류소·도착 값 대조 상세 (우선 확인)", ""]
+    for r in results:
+        m = r["metrics"]
+        st, av = m["station_match"], m["arrival_values"]
+        lines = []
+        if st and st["score"] < 1:
+            lines.append(f"정류소 불일치: 기대 {st['expected']} / 조회 {st['used']} (이번 턴 조회 {st['all_lookups']})")
+        if av and av["score"] < 1:
+            for d in av["details"]:
+                if not d["ok"]:
+                    lines.append(f"[{d['source']}] '{d['text']}' -> {d['reason']}")
+        if lines:
+            out.append(f"- **{r['id']}** ({r['question']}) 답변: {r['reply']}")
+            out += [f"  - {x}" for x in lines]
+    if not any((r["metrics"]["station_match"] or {}).get("score", 1) < 1 or
+               (r["metrics"]["arrival_values"] or {}).get("score", 1) < 1 for r in results):
+        out.append("- 불일치 없음")
+    out += ["", "## 그 밖의 감점 상세", ""]
     for r in results:
         m = r["metrics"]
         notes = []
