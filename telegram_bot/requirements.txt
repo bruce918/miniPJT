@@ -1,0 +1,2 @@
+# 텔레그램 봇 전용 (프로젝트 루트 requirements.txt에 더해 설치)
+Pillow>=10

@@ -14,6 +14,7 @@
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import sys
@@ -22,7 +23,7 @@ from collections import defaultdict, deque
 import httpx
 from dotenv import load_dotenv
 
-from . import render
+from . import render, table_image
 
 load_dotenv()
 
@@ -59,6 +60,28 @@ class Bot:
         return await self.call("sendMessage", chat_id=chat_id, text=text, parse_mode="HTML",
                                reply_markup=markup, disable_web_page_preview=True)
 
+    async def upload(self, method: str, fields: dict, png: bytes, name: str = "table"):
+        """사진을 올리는 요청 (multipart). fields의 dict 값은 JSON 문자열로 보낸다."""
+        data = {k: (json.dumps(v, ensure_ascii=False) if isinstance(v, dict) else str(v))
+                for k, v in fields.items() if v is not None}
+        r = await self.tg.post(f"{self.api}/{method}", data=data, files={name: (f"{name}.png", png, "image/png")})
+        result = r.json()
+        if not result.get("ok"):
+            raise TelegramError(f"{method}: {result.get('error_code')} {result.get('description')}")
+        return result["result"]
+
+    async def send_table(self, chat_id: int, table: dict, caption: str, markup: dict | None, fallback):
+        """표를 그림으로 보낸다. 한글 글꼴이 없거나 그리기·전송에 실패하면 글자 메시지(fallback)로 보낸다."""
+        if table_image.available():
+            try:
+                png = await asyncio.to_thread(table_image.render, table, render.now_label()
+                                              if table.get("kind") == "arrivals" else "")
+                return await self.upload("sendPhoto", {"chat_id": chat_id, "caption": caption,
+                                                       "parse_mode": "HTML", "reply_markup": markup}, png, "photo")
+            except Exception as e:
+                log.warning("표 그림 전송 실패, 글자로 보냄: %s", e)
+        return await self.send(chat_id, *fallback)
+
     # ---------- 챗봇 서버 ----------
 
     async def ask(self, chat_id: int, query: str):
@@ -85,9 +108,11 @@ class Bot:
         arrivals = next((t for t in tables if t.get("kind") == "arrivals"), None)
         if arrivals:
             # 웹과 같이 도착 표가 있으면 모델의 요약 문장 없이 표만 보여 준다
-            await self.send(chat_id, *render.arrivals_message(arrivals))
+            await self.send_table(chat_id, arrivals, render.arrivals_caption(arrivals),
+                                  render.arrivals_markup(arrivals), render.arrivals_message(arrivals))
         elif stations:
-            await self.send(chat_id, *render.stations_message(stations, reply))
+            await self.send_table(chat_id, render.stations_for_image(stations), render.stations_caption(reply),
+                                  render.stations_buttons(stations), render.stations_message(stations, reply))
         else:
             await self.send(chat_id, *render.reply_message(reply, sources, data.get("intent") == "policy_qa"))
         histories[chat_id].extend([
@@ -95,19 +120,27 @@ class Bot:
             {"role": "assistant", "content": render.history_content(reply, tables)},
         ])
 
-    async def refresh(self, chat_id: int, message_id: int, station_id: str) -> str:
-        """도착 메시지의 새로고침 버튼: 모델 없이 도착 정보만 다시 받아 그 메시지를 고친다."""
+    async def refresh(self, chat_id: int, message_id: int, station_id: str, is_photo: bool) -> str:
+        """도착 메시지의 새로고침 버튼: 모델 없이 도착 정보만 다시 받아 그 메시지(그림 또는 글자)를 고친다."""
         try:
             r = await self.chatbot.get("/api/arrivals", params={"station_id": station_id})
             if r.status_code != 200:
                 return (r.json().get("detail") if r.headers.get("content-type", "").startswith("application/json")
                         else None) or "갱신하지 못했어요."
-            text, markup = render.arrivals_message(r.json()["table"])
+            table = r.json()["table"]
         except httpx.HTTPError:
             return "버스봇 서버에 연결하지 못했어요."
         try:
-            await self.call("editMessageText", chat_id=chat_id, message_id=message_id, text=text,
-                            parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True)
+            if is_photo and table_image.available():
+                png = await asyncio.to_thread(table_image.render, table, render.now_label())
+                media = {"type": "photo", "media": "attach://table",
+                         "caption": render.arrivals_caption(table), "parse_mode": "HTML"}
+                await self.upload("editMessageMedia", {"chat_id": chat_id, "message_id": message_id, "media": media,
+                                                       "reply_markup": render.arrivals_markup(table)}, png)
+            else:
+                text, markup = render.arrivals_message(table)
+                await self.call("editMessageText", chat_id=chat_id, message_id=message_id, text=text,
+                                parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True)
         except TelegramError as e:
             if "not modified" not in str(e):  # 같은 분 안에 다시 눌러 내용이 같으면 그대로 둔다
                 raise
@@ -148,7 +181,7 @@ class Bot:
             return
         kind, _, value = data.partition(":")
         if kind == "ref" and value.isdigit():
-            note = await self.refresh(chat_id, msg["message_id"], value)
+            note = await self.refresh(chat_id, msg["message_id"], value, bool(msg.get("photo")))
             await self.call("answerCallbackQuery", callback_query_id=cq["id"], text=note)
             return
         await self.call("answerCallbackQuery", callback_query_id=cq["id"])  # 버튼의 로딩 표시를 끈다

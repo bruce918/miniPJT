@@ -59,7 +59,6 @@ def menu_keyboard() -> dict:
 def stations_message(table: dict, reply: str) -> tuple[str, dict]:
     reply = reply.replace("표에서 골라 주세요.", "").strip()  # 웹용 문구 (텔레그램은 버튼으로 고른다)
     lines = [escape(reply), "", f"<b>{escape(table.get('title') or '정류소 후보')}</b>"]
-    buttons = []
     for r in table.get("rows", []):
         extra = " · ".join(x for x in (
             f"→ {r['next']}" if r.get("next") else "",
@@ -67,20 +66,44 @@ def stations_message(table: dict, reply: str) -> tuple[str, dict]:
             f"정류소번호 {r['mobile']}" if r.get("mobile") else "",
         ) if x)
         lines.append(f"{r['no']}. <b>{escape(r['name'])}</b>" + (f"\n    {escape(extra)}" if extra else ""))
+    lines += ["", escape(stations_for_image(table)["note"])]
+    return clip("\n".join(lines)), stations_buttons(table)
+
+
+def stations_buttons(table: dict) -> dict:
+    rows = []
+    for r in table.get("rows", []):
         label = f"{r['no']}. {r['name']}" + (f" → {r['next']}" if r.get("next") else "")
-        buttons.append([(label, f"pick:{r['id']}")])
+        rows.append([(label, f"pick:{r['id']}")])
+    return keyboard(rows)
+
+
+def stations_for_image(table: dict) -> dict:
+    """그림에 넣을 후보 표: 웹용 안내("행을 누르면…")를 버튼 안내로 바꾼다."""
     note = (table.get("note") or "").replace(WEB_ONLY_NOTE, "").strip()
-    lines += ["", escape(note + (" " if note else "") + "아래 버튼을 눌러 정류소를 고르세요.")]
-    return clip("\n".join(lines)), keyboard(buttons)
+    return {**table, "note": (note + " " if note else "") + "아래 버튼을 눌러 정류소를 고르세요."}
 
 
-def _now_label() -> str:
+def stations_caption(reply: str) -> str:
+    return escape(reply.replace("표에서 골라 주세요.", "").strip() + " 아래 버튼에서 골라 주세요.")
+
+
+def arrivals_caption(table: dict) -> str:
+    return f"<b>{escape(table.get('title') or '도착 정보')}</b> · {now_label()}"
+
+
+def arrivals_markup(table: dict) -> dict | None:
+    sid = table.get("station_id")
+    return keyboard([[("↻ 새로고침", f"ref:{sid}")]]) if sid else None
+
+
+def now_label() -> str:
     now = datetime.now()
     return f"{'오전' if now.hour < 12 else '오후'} {now.hour % 12 or 12}:{now.minute:02d} 기준"
 
 
 def arrivals_message(table: dict) -> tuple[str, dict | None]:
-    lines = [f"<b>{escape(table.get('title') or '도착 정보')}</b>  <i>{_now_label()}</i>", ""]
+    lines = [f"<b>{escape(table.get('title') or '도착 정보')}</b>  <i>{now_label()}</i>", ""]
     for r in table.get("rows", []):
         soon = r.get("minutes") is not None and r["minutes"] <= 2
         head = f"{'🔴' if soon else '🚌'} <b>{escape(r['route'])}</b>"
