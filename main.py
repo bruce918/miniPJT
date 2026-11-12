@@ -1,7 +1,7 @@
 """경기도 버스 도착 정보 챗봇 서버.
 
 질문은 LangGraph 그래프(chat_graph.py)로 보낸다. classify 노드가 질문을 분류해
-버스 도착 에이전트(MCP 도구 사용) 또는 범위 밖 안내 노드로 보낸다.
+버스 도착 에이전트(MCP 도구 사용), 정책 안내 에이전트(RAG 문서 검색) 또는 범위 밖 안내 노드로 보낸다.
 
 실행:
     pip install -r requirements.txt
@@ -37,6 +37,7 @@ class ChatResponse(BaseModel):
     reply: str
     intent: str | None = None  # classify 결과 (디버깅·테스트용)
     tables: list[dict] = []    # render_table 도구가 만든 표 (UI가 그린다. 각 표의 text는 평문 버전)
+    sources: list[dict] = []   # 정책 답변의 근거 문서 출처 (retrieve_docs 결과)
 
 
 _graph = None
@@ -76,7 +77,7 @@ async def generate_reply(message: str, history: list[Message]) -> ChatResponse:
     except Exception as e:
         print(f"그래프 오류: {type(e).__name__}: {e}")
         return ChatResponse(reply=f"조회 중 오류가 났습니다 ({type(e).__name__}). 잠시 후 다시 시도해 주세요.")
-    return ChatResponse(reply=turn.reply, intent=turn.intent, tables=turn.tables)
+    return ChatResponse(reply=turn.reply, intent=turn.intent, tables=turn.tables, sources=turn.sources)
 
 
 @app.get("/")

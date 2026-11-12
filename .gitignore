@@ -10,3 +10,5 @@ skills-lock.json
 .archify/
 # 평가 실행 결과 (evaluate.py)
 eval_results/
+# RAG 임베딩 캐시 (rag.py)
+.rag_index/

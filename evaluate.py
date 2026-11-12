@@ -36,6 +36,7 @@ from typing import Literal
 from dotenv import load_dotenv
 from langchain_aws import BedrockEmbeddings
 from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
 from bus_agent import BUS_MODEL_ID, get_text, make_llm
@@ -102,16 +103,71 @@ class JudgeScore(BaseModel):
     reason: str = Field(description="점수 근거 한두 문장")
 
 
+# ---------- LCEL 체인 (프롬프트 템플릿 | 모델.with_structured_output(Pydantic)) ----------
+# 템플릿 문자열에는 고정 문구만 두고, 컨텍스트 JSON·대화 기록처럼 중괄호가 들어갈 수 있는 값은
+# 모두 {변수}로 넘긴다 (변수 값은 다시 템플릿으로 해석되지 않는다).
+
+PROMPTS = {
+    "statements": ChatPromptTemplate.from_messages([
+        ("system",
+         "질문과 답변이 주어집니다. 답변을 이해하기 쉬운 원자적 사실 문장들로 쪼개세요.\n"
+         "- 각 문장은 대명사 없이 혼자 읽어도 뜻이 통해야 합니다.\n"
+         "- 버스·정류소·도착 정보에 대한 사실 주장만 뽑고, '표에서 골라 주세요' 같은 안내·요청 문장은 빼세요."),
+        ("human", "질문: {question}\n답변: {answer}"),
+    ]),
+    "nli": ChatPromptTemplate.from_messages([
+        ("system",
+         "컨텍스트(도구 결과)와 문장 목록이 주어집니다. 각 문장이 컨텍스트로부터 직접 추론되면 1, 아니면 0으로 판정하세요.\n"
+         "가장 먼저·다음·가장 늦게 같은 비교 주장은 컨텍스트의 모든 노선 predictTime1을 비교해서 판정하세요.\n"
+         "{guide}"),
+        ("human", "[컨텍스트]\n{contexts}\n\n[문장]\n{statements}"),
+    ]),
+    "questions": ChatPromptTemplate.from_messages([
+        ("system",
+         "답변을 보고, 이 답변이 답하고 있는 사용자 질문을 서로 다르게 3개 만드세요. "
+         "답변이 회피하거나 모호하면 noncommittal을 true로 하세요."),
+        ("human", "답변: {answer}"),
+    ]),
+    "goal": ChatPromptTemplate.from_messages([
+        ("system",
+         "에이전트와 사용자의 대화 기록과 기대 목표가 주어집니다. 대화가 끝난 시점의 최종 상태를 요약하고, "
+         "기대 목표를 달성했는지 판정하세요. 실시간 도착 시간 값 자체는 비교하지 말고 행동과 결과를 보세요."),
+        ("human", "[대화 기록]\n{transcript}\n\n[기대 목표]\n{reference}"),
+    ]),
+    "judge": ChatPromptTemplate.from_messages([
+        ("system",
+         "당신은 경기도 버스 도착 안내 챗봇의 답변을 채점하는 엄격한 평가자입니다.\n"
+         "대화 기록(도구 호출·결과 포함)과 기대 행동을 보고 루브릭별로 1~5점을 매기세요.\n"
+         "5=완벽, 4=사소한 아쉬움, 3=눈에 띄는 문제, 2=중대한 문제, 1=완전히 틀림.\n"
+         "도착 시간은 실시간 값이므로 기대 행동과 숫자를 비교하지 말고, 도구 결과와 일치하는지만 보세요.\n"
+         "도구 결과에 없는 노선·도착 시간을 말했거나 도구를 호출하지 않고 도착 정보를 말했다면 지어낸 것입니다: "
+         "groundedness 1점, verdict fail.\n"
+         "기대 행동에 없는 도구 호출(예: 정류소 ID를 짐작해 먼저 조회)이나 기대 목표 미달성은 correctness에서 감점하세요.\n"
+         "답변 텍스트와 화면 표(평문) 모두 사용자가 보는 내용입니다.\n"
+         "{guide}"),
+        ("human", "[대화 기록]\n{transcript}\n\n[기대 행동]\n{reference}"),
+    ]),
+}
+
+SCHEMAS = {"statements": Statements, "nli": Verdicts, "questions": GeneratedQuestions,
+           "goal": GoalVerdict, "judge": JudgeScore}
+
+
+def build_eval_chains(llm) -> dict:
+    """지표별 LCEL 체인. 입력 dict -> 출력 Pydantic 모델. CONTEXT_GUIDE는 partial로 미리 채운다."""
+    chains = {}
+    for name, prompt in PROMPTS.items():
+        if "guide" in prompt.input_variables:
+            prompt = prompt.partial(guide=CONTEXT_GUIDE)
+        chains[name] = prompt | llm.with_structured_output(SCHEMAS[name])
+    return chains
+
+
 # ---------- 지표 ----------
 
 class Evaluator:
     def __init__(self):
-        llm = make_llm(max_tokens=1500, model_id=JUDGE_MODEL_ID)
-        self.statement_llm = llm.with_structured_output(Statements)
-        self.nli_llm = llm.with_structured_output(Verdicts)
-        self.question_llm = llm.with_structured_output(GeneratedQuestions)
-        self.goal_llm = llm.with_structured_output(GoalVerdict)
-        self.judge_llm = llm.with_structured_output(JudgeScore)
+        self.chains = build_eval_chains(make_llm(max_tokens=1500, model_id=JUDGE_MODEL_ID))
         self.embeddings = BedrockEmbeddings(model_id=EMBED_MODEL_ID, region_name="us-east-1")
 
     async def faithfulness(self, question: str, answer: str, contexts: list[str], required: bool = False) -> dict | None:
@@ -122,20 +178,13 @@ class Evaluator:
         """
         if not contexts and not required:
             return None
-        st = await self.statement_llm.ainvoke(
-            "질문과 답변이 주어집니다. 답변을 이해하기 쉬운 원자적 사실 문장들로 쪼개세요.\n"
-            "- 각 문장은 대명사 없이 혼자 읽어도 뜻이 통해야 합니다.\n"
-            "- 버스·정류소·도착 정보에 대한 사실 주장만 뽑고, '표에서 골라 주세요' 같은 안내·요청 문장은 빼세요.\n\n"
-            f"질문: {question}\n답변: {answer}"
-        )
+        st: Statements = await self.chains["statements"].ainvoke({"question": question, "answer": answer})
         if not st.statements:
             return None  # 사실 주장이 없는 답변 (RAGAS에서도 NaN)
-        nli = await self.nli_llm.ainvoke(
-            "컨텍스트(도구 결과)와 문장 목록이 주어집니다. 각 문장이 컨텍스트로부터 직접 추론되면 1, 아니면 0으로 판정하세요.\n"
-            "가장 먼저·다음·가장 늦게 같은 비교 주장은 컨텍스트의 모든 노선 predictTime1을 비교해서 판정하세요.\n"
-            f"{CONTEXT_GUIDE}\n\n[컨텍스트]\n" + ("\n---\n".join(contexts) or "(도구 결과 없음)")
-            + "\n\n[문장]\n" + "\n".join(f"- {s}" for s in st.statements)
-        )
+        nli: Verdicts = await self.chains["nli"].ainvoke({
+            "contexts": "\n---\n".join(contexts) or "(도구 결과 없음)",
+            "statements": "\n".join(f"- {s}" for s in st.statements),
+        })
         if not nli.verdicts:
             return None
         score = sum(v.verdict for v in nli.verdicts) / len(nli.verdicts)
@@ -143,10 +192,7 @@ class Evaluator:
 
     async def answer_relevancy(self, question: str, answer: str) -> dict:
         """RAGAS ResponseRelevancy: 답변에서 역생성한 질문들과 원 질문의 코사인 유사도 평균 (회피성이면 0)."""
-        gen = await self.question_llm.ainvoke(
-            "아래 답변을 보고, 이 답변이 답하고 있는 사용자 질문을 서로 다르게 3개 만드세요. "
-            "답변이 회피하거나 모호하면 noncommittal을 true로 하세요.\n\n답변: " + answer
-        )
+        gen: GeneratedQuestions = await self.chains["questions"].ainvoke({"answer": answer})
         qs = [q for q in gen.questions if q.strip()][:3]
         if not qs:
             return {"score": 0.0, "generated": [], "noncommittal": gen.noncommittal}
@@ -157,26 +203,12 @@ class Evaluator:
 
     async def goal_accuracy(self, transcript: str, reference: str) -> dict:
         """RAGAS AgentGoalAccuracyWithReference: 최종 상태가 기대 목표를 달성했는지 0/1."""
-        g = await self.goal_llm.ainvoke(
-            "에이전트와 사용자의 대화 기록과 기대 목표가 주어집니다. 대화가 끝난 시점의 최종 상태를 요약하고, "
-            "기대 목표를 달성했는지 판정하세요. 실시간 도착 시간 값 자체는 비교하지 말고 행동과 결과를 보세요.\n\n"
-            f"[대화 기록]\n{transcript}\n\n[기대 목표]\n{reference}"
-        )
+        g: GoalVerdict = await self.chains["goal"].ainvoke({"transcript": transcript, "reference": reference})
         return {"score": 1.0 if g.achieved else 0.0, "end_state": g.end_state, "reason": g.reason}
 
     async def judge(self, transcript: str, reference: str) -> dict:
         """LLM-as-Judge: 루브릭 4개(1~5)와 pass/fail."""
-        j = await self.judge_llm.ainvoke(
-            "당신은 경기도 버스 도착 안내 챗봇의 답변을 채점하는 엄격한 평가자입니다.\n"
-            "대화 기록(도구 호출·결과 포함)과 기대 행동을 보고 루브릭별로 1~5점을 매기세요.\n"
-            "5=완벽, 4=사소한 아쉬움, 3=눈에 띄는 문제, 2=중대한 문제, 1=완전히 틀림.\n"
-            "도착 시간은 실시간 값이므로 기대 행동과 숫자를 비교하지 말고, 도구 결과와 일치하는지만 보세요.\n"
-            "도구 결과에 없는 노선·도착 시간을 말했거나 도구를 호출하지 않고 도착 정보를 말했다면 지어낸 것입니다: "
-            "groundedness 1점, verdict fail.\n"
-            "기대 행동에 없는 도구 호출(예: 정류소 ID를 짐작해 먼저 조회)이나 기대 목표 미달성은 correctness에서 감점하세요.\n"
-            "답변 텍스트와 화면 표(평문) 모두 사용자가 보는 내용입니다.\n"
-            f"{CONTEXT_GUIDE}\n\n[대화 기록]\n{transcript}\n\n[기대 행동]\n{reference}"
-        )
+        j: JudgeScore = await self.chains["judge"].ainvoke({"transcript": transcript, "reference": reference})
         data = j.model_dump()
         data["score"] = (j.correctness + j.groundedness + j.policy + j.clarity) / 4
         return data
