@@ -39,6 +39,14 @@ histories: dict[int, deque] = defaultdict(lambda: deque(maxlen=MAX_HISTORY))
 locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)  # 같은 방의 질문은 순서대로 처리
 
 
+def session_id(chat_id: int) -> str:
+    """챗봇 서버에 보내는 대화 ID. 채팅 ID를 그대로 남기지 않도록 해시한다.
+
+    서버는 이 값을 LangSmith 대화 묶음, 보류 계획(복합 질문) 키, 장기 메모리 키(tg:...)로 쓴다.
+    """
+    return "tg-" + hashlib.sha256(str(chat_id).encode()).hexdigest()[:16]
+
+
 class TelegramError(RuntimeError):
     pass
 
@@ -90,8 +98,7 @@ class Bot:
         payload = {
             "message": query,
             "history": list(histories[chat_id]),
-            # LangSmith에서 대화 단위로 묶되, 텔레그램 채팅 ID를 그대로 남기지 않도록 해시한다
-            "session_id": "tg-" + hashlib.sha256(str(chat_id).encode()).hexdigest()[:16],
+            "session_id": session_id(chat_id),
             "client": "telegram",
         }
         try:
@@ -110,6 +117,22 @@ class Bot:
             await self.send(chat_id, render.escape(f"🔒 개인정보({', '.join(guard['pii'])})는 가려서 처리했어요. "
                                                    "채팅에 개인정보를 보내지 마세요."))
             query = guard.get("masked") or query
+        # 복합 질문은 단계(parts)별 결과가 온다: 단계마다 차례로 보낸다 (예: 도착 표 바로 다음에 요금 답변)
+        parts = data.get("parts") or [{"intent": data.get("intent"), "reply": reply, "tables": tables,
+                                       "sources": sources}]
+        for i, part in enumerate(parts):
+            last = i == len(parts) - 1
+            # "다른 질문 보기" 버튼은 이용 방법만 물은 답에만 붙인다 (도착 정보가 섞인 답은 웹처럼 메뉴 없이 끝냄)
+            await self.send_part(chat_id, part, menu=last and all(p.get("intent") == "policy_qa" for p in parts))
+        if guard.get("blocked"):
+            return  # 차단된 질문은 기록에 남기지 않는다
+        histories[chat_id].extend([
+            {"role": "user", "content": query},
+            {"role": "assistant", "content": render.history_content(reply, tables)},
+        ])
+
+    async def send_part(self, chat_id: int, part: dict, menu: bool):
+        reply, tables = part.get("reply", ""), part.get("tables", [])
         stations = next((t for t in tables if t.get("kind") == "stations"), None)
         arrivals = next((t for t in tables if t.get("kind") == "arrivals"), None)
         if arrivals:
@@ -120,13 +143,17 @@ class Bot:
             await self.send_table(chat_id, render.stations_for_image(stations), render.stations_caption(reply),
                                   render.stations_buttons(stations), render.stations_message(stations, reply))
         else:
-            await self.send(chat_id, *render.reply_message(reply, sources, data.get("intent") == "policy_qa"))
-        if guard.get("blocked"):
-            return  # 차단된 질문은 기록에 남기지 않는다
-        histories[chat_id].extend([
-            {"role": "user", "content": query},
-            {"role": "assistant", "content": render.history_content(reply, tables)},
-        ])
+            await self.send(chat_id, *render.reply_message(reply, part.get("sources", []), menu))
+
+    async def forget(self, chat_id: int):
+        """버스봇이 이 채팅에 대해 기억한 내용(장기 메모리)을 지운다."""
+        try:
+            r = await self.chatbot.delete("/api/memory", params={"session_id": session_id(chat_id)})
+            r.raise_for_status()
+            await self.send(chat_id, f"기억을 지웠어요 ({r.json().get('removed', 0)}건). 대화 기록도 비웠어요.")
+        except httpx.HTTPError:
+            await self.send(chat_id, "기억을 지우지 못했어요. 잠시 후 다시 시도해 주세요.")
+        histories.pop(chat_id, None)
 
     async def refresh(self, chat_id: int, message_id: int, station_id: str, is_photo: bool) -> str:
         """도착 메시지의 새로고침 버튼: 모델 없이 도착 정보만 다시 받아 그 메시지(그림 또는 글자)를 고친다."""
@@ -174,6 +201,9 @@ class Bot:
         if command in ("/start", "/help", "/menu"):
             await self.send(chat_id, *render.welcome())
             return
+        if command == "/forget":
+            await self.forget(chat_id)
+            return
         if command == "/reset":
             histories.pop(chat_id, None)
             await self.send(chat_id, "대화 기록을 지웠어요. 정류소 이름을 보내 주세요.")
@@ -211,6 +241,7 @@ class Bot:
         await self.call("setMyCommands", commands=[
             {"command": "start", "description": "처음 메뉴 보기"},
             {"command": "reset", "description": "대화 기록 지우기"},
+            {"command": "forget", "description": "버스봇이 기억한 내 정보 지우기"},
         ])
         log.info("@%s 시작 (챗봇 서버 %s, 허용 사용자 %s)", me["username"], CHATBOT_URL,
                  len(ALLOWED_USERS) or "제한 없음")

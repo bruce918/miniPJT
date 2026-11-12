@@ -85,7 +85,7 @@ def stations_for_image(table: dict) -> dict:
 
 
 def stations_caption(reply: str) -> str:
-    return escape(reply.replace("표에서 골라 주세요.", "").strip() + " 아래 버튼에서 골라 주세요.")
+    return escape(reply.replace("표에서 골라 주세요.", "아래 버튼에서 골라 주세요."))
 
 
 def arrivals_caption(table: dict) -> str:
