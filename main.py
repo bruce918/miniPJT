@@ -38,7 +38,7 @@ class ChatRequest(BaseModel):
     message: str
     history: list[Message] = []
     session_id: str | None = Field(default=None, max_length=64)  # 대화 ID (LangSmith Threads로 묶임)
-    client: Literal["web", "test"] = "web"                       # 트레이스 구분용 (run_tests.py는 test)
+    client: Literal["web", "test", "telegram"] = "web"           # 트레이스 구분용 (run_tests.py는 test, 텔레그램 봇은 telegram)
 
 
 class ChatResponse(BaseModel):

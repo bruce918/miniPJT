@@ -136,6 +136,11 @@ verify는 도착 도구 없이 도착 시간을 말하거나 데이터 도구 �
     (서버가 http/https 주소만 넘기고, 링크에 `rel="noopener noreferrer"`).
   - **평문 답변:** 화면은 평문으로 보여 주므로, 모델이 프롬프트를 어기고 쓴 마크다운 기호(`**`, `__`, `#`, `` ` ``)를
     서버가 답변을 돌려주기 전에 지운다 (`chat_graph.strip_markdown`).
+- **텔레그램 봇** (`telegram_bot/`, `python -m telegram_bot`): 같은 버스봇을 텔레그램에서 쓴다. 봇은 챗봇 서버의
+  `/api/chat`·`/api/arrivals`를 불러 결과를 텔레그램 메시지로 바꾸기만 하므로, 분류·도착 조회·정책 검색·가드레일은 웹과 같다.
+  정류소 후보는 고르기 버튼(정류소 ID로 조회), 도착 정보는 노선별 줄 목록과 ↻ 새로고침 버튼, 정책 답변은 출처 링크로 보여 준다.
+  롱 폴링이라 공개 주소가 필요 없고, `TELEGRAM_ALLOWED_USERS`로 쓸 수 있는 사람을 제한할 수 있다.
+  트레이스는 `source:telegram`으로 구분된다. 자세한 내용은 `telegram_bot/README.md`.
 - **데이터 소스:** 모두 실제 데이터
   - 공공데이터포털 경기도 버스도착정보 API (실시간, `DATA_GO_KR_KEY` 필요)
   - 공공데이터포털 경기도_정류소 조회(`getBusStationViaRouteListv2`)·경기도_버스노선 조회(`getBusRouteStationListv2`):
