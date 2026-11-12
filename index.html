@@ -207,6 +207,28 @@
       box-shadow: var(--shadow);
     }
     .chip:hover { filter: brightness(0.97); }
+    .chip { display: inline-flex; align-items: center; gap: 6px; text-align: left; }
+    /* 정책 질문 10종: 2열 카드 (주제 위, 질문 아래) */
+    .chips.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; width: min(420px, 100%); }
+    .chips.grid .chip {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
+      border-radius: 12px;
+      padding: 8px 10px;
+      font-size: 12.5px;
+      line-height: 1.35;
+      word-break: keep-all;
+    }
+    .chip-tag {
+      flex-shrink: 0;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 1px 7px;
+      border-radius: 999px;
+      background: var(--avatar);
+      color: #3a2e00;
+    }
     .chip:disabled { opacity: 0.5; cursor: default; }
 
     /* ---------- 표 카드 ---------- */
@@ -290,7 +312,20 @@
     }
     .sources strong { color: var(--text); font-weight: 700; }
     .sources ul { margin: 4px 0 0; padding-left: 16px; }
-    .sources li { margin: 2px 0; word-break: break-all; }
+    .sources li { margin: 3px 0; word-break: keep-all; overflow-wrap: anywhere; }
+    .sources .src-title { color: var(--text); font-weight: 600; }
+    .src-link {
+      display: inline-block;
+      margin-left: 6px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: var(--badge-bg);
+      color: var(--accent);
+      font-weight: 700;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .src-link:hover { text-decoration: underline; }
     .feedback { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
     .feedback button {
       border: none;
@@ -378,7 +413,20 @@
     const sendBtn = document.getElementById("send");
 
     const BOT_NAME = "버스봇";
-    const QUICK = ["미금역 버스 언제 와?", "환승 몇 분 안에 해야 돼?", "버스에 지갑 두고 내렸어", "청소년 버스비 얼마야?"];
+    // 처음 화면 예시 질문: 실시간 도착 + 정책 문서(docs/policy) 10종의 대표 질문
+    const QUICK_ARRIVAL = ["미금역 버스 언제 와?", "7079 도착"];
+    const QUICK_POLICY = [
+      ["요금", "청소년 버스비 얼마야?"],
+      ["환승", "환승 몇 분 안에 해야 할인돼?"],
+      ["교통카드", "학생 할인 받으려면 카드 등록해야 돼?"],
+      ["분실물", "버스에 지갑 두고 내렸어"],
+      ["민원", "기사가 정류장 그냥 지나쳤어 어디 신고해?"],
+      ["경기패스", "경기패스 환급 얼마나 받아?"],
+      ["어르신·장애인", "어르신 지하철 무료 카드 어디서 만들어?"],
+      ["버스정보", "버스 도착 예정 시간이 왜 자꾸 틀려?"],
+      ["광역버스", "광역버스 서서 타도 돼?"],
+      ["공공버스", "경기도 공공버스가 뭐야?"],
+    ];
     const AVATAR_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="#3a2e00" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="14" rx="3"/><path d="M4 11h16M8 21v-4M16 21v-4"/></svg>';
 
     let history = []; // [{role, content}]
@@ -523,7 +571,24 @@
       const box = el("div", "sources");
       box.appendChild(el("strong", "", "출처"));
       const list = el("ul");
-      sources.forEach((s) => list.appendChild(el("li", "", s.title + " · " + s.citation)));
+      sources.forEach((s) => {
+        const li = el("li");
+        li.appendChild(el("span", "src-title", s.title));
+        if (s.name) li.appendChild(el("span", "src-name", " · " + s.name));
+        // 공식 페이지를 새 탭에서 연다 (http/https만, 새 탭이 이 페이지에 접근하지 못하게 noopener)
+        if (/^https?:\/\//.test(s.url || "")) {
+          const a = el("a", "src-link", "바로가기 ↗");
+          a.href = s.url;
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          a.title = s.url;
+          a.setAttribute("aria-label", `${s.title} 공식 페이지 새 탭에서 열기`);
+          li.appendChild(a);
+        } else if (!s.name) {
+          li.appendChild(el("span", "src-name", " · " + s.citation));
+        }
+        list.appendChild(li);
+      });
       box.appendChild(list);
       col.appendChild(box);
       scrollDown();
@@ -561,18 +626,31 @@
 
     // ---------- 첫 화면 ----------
 
-    function welcome() {
-      messagesEl.replaceChildren(el("div", "date-pill", dateLabel()));
-      const col = botGroup();
-      bubbleLine(col, "bot", "안녕하세요! 경기도 버스 안내봇이에요 🚌\n정류소 이름을 말하면 지금 오는 버스를 알려 드리고, 요금·환승·분실물 같은 이용 방법도 안내해 드려요.", true);
-      const chips = el("div", "chips");
-      QUICK.forEach((q) => {
-        const chip = el("button", "chip", q);
+    // [주제, 질문] 목록을 누르면 바로 보내지는 버튼으로 만든다
+    function chipList(items, grid) {
+      const chips = el("div", "chips" + (grid ? " grid" : ""));
+      items.forEach(([tag, q]) => {
+        const chip = el("button", "chip");
         chip.type = "button";
+        if (tag) chip.appendChild(el("span", "chip-tag", tag));
+        chip.appendChild(el("span", "", q));
         chip.addEventListener("click", () => { if (!busy) send(q); });
         chips.appendChild(chip);
       });
-      col.appendChild(chips);
+      return chips;
+    }
+
+    // 최초 질문 메뉴: 실시간 도착 예시 + 이용 방법 10종 (첫 화면, 그리고 이용 방법 답변 뒤에 다시 보여 준다)
+    function addMenu(col, intro, tail) {
+      bubbleLine(col, "bot", intro, tail);
+      col.appendChild(chipList(QUICK_ARRIVAL.map((q) => [null, q])));
+      bubbleLine(col, "bot", "이용 방법도 물어보세요. 공식 안내에서 찾아 드려요.", false);
+      col.appendChild(chipList(QUICK_POLICY, true));
+    }
+
+    function welcome() {
+      messagesEl.replaceChildren(el("div", "date-pill", dateLabel()));
+      addMenu(botGroup(), "안녕하세요! 경기도 버스 안내봇이에요 🚌\n정류소 이름을 말하면 지금 오는 버스를 알려 드려요.", true);
     }
 
     // ---------- 전송 ----------
@@ -623,6 +701,12 @@
         }
         addSources(col, data.sources || []);
         addFeedback(col, data.trace_id);
+        if (data.intent === "policy_qa") {
+          // 이용 방법 답변 뒤에는 최초 질문 메뉴로 돌아가 다음 질문을 바로 고를 수 있게 한다
+          addMenu(botGroup(), "다른 것도 궁금하면 골라 보세요. 정류소 이름을 말하면 도착 정보를 알려 드려요.", true);
+          // 메뉴가 길어 맨 아래로 내려가면 방금 받은 답이 가려지므로, 답변이 화면 위쪽에 오게 한다
+          col.closest(".row").scrollIntoView({ block: "start" });
+        }
         // 다음 질문에서 "4번"처럼 고를 수 있게 표의 평문(정류소 ID 포함)도 대화 기록에 남긴다
         // 다시 보여 준 후보 목록도 넣는다: 서버는 최근 대화만 보므로 처음 목록이 밀려나도 번호로 고를 수 있게
         const content = [data.reply, ...shown.map((t) => t.title + "\n" + t.text)].join("\n\n");

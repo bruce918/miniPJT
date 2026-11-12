@@ -345,5 +345,9 @@ async def retrieve_docs(query: str) -> tuple[str, list[dict]]:
     result = await retriever.search(query)
     hits = result["hits"]
     artifact = [{"id": h.chunk.id, "title": h.chunk.title, "heading": h.chunk.heading,
-                 "citation": h.chunk.citation(), "rerank": h.rerank, "rrf": round(h.rrf, 4)} for h in hits]
+                 "citation": h.chunk.citation(),
+                 # 화면의 바로가기 링크용 (문서 머리말의 첫 번째 출처)
+                 "source_name": (h.chunk.sources[0] if h.chunk.sources else {}).get("name", ""),
+                 "url": (h.chunk.sources[0] if h.chunk.sources else {}).get("url", ""),
+                 "rerank": h.rerank, "rrf": round(h.rrf, 4)} for h in hits]
     return format_hits(hits), artifact

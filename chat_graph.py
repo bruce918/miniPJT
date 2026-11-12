@@ -253,6 +253,19 @@ async def build_chat_graph():
 
 KEEP_LAST_MESSAGES = 6  # 그래프에 보내는 이전 대화 상한 (토큰 절약)
 
+# 화면은 평문으로 보여 주므로 모델이 프롬프트를 어기고 쓴 마크다운 기호를 지운다.
+# 줄바꿈과 '-' 목록은 평문으로도 자연스러워 남긴다.
+_MD_BOLD = re.compile(r"(\*\*|__)(.+?)\1", re.S)
+_MD_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+", re.M)
+_MD_CODE = re.compile(r"`([^`]*)`")
+
+
+def strip_markdown(text: str) -> str:
+    text = _MD_BOLD.sub(r"\2", text)
+    text = text.replace("**", "")  # 짝이 맞지 않고 남은 별표
+    text = _MD_HEADING.sub("", text)
+    return _MD_CODE.sub(r"\1", text)
+
 
 @dataclass
 class ChatTurn:
@@ -303,7 +316,7 @@ async def run_chat(graph, message: str, history: list[tuple[str, str]],
     # 모델이 render_table 호출과 함께 답을 먼저 쓰고 마지막 메시지를 비우는 경우가 있어,
     # 마지막 메시지가 비면 이번 턴의 가장 최근 AI 텍스트를 쓴다.
     ai_texts = [get_text(m).strip() for m in turn if isinstance(m, AIMessage)]
-    reply = next((t for t in reversed(ai_texts) if t), "") or "답변을 만들지 못했습니다."
+    reply = strip_markdown(next((t for t in reversed(ai_texts) if t), "")) or "답변을 만들지 못했습니다."
     tables = [m.artifact for m in turn if isinstance(m, ToolMessage) and m.name == "render_table" and m.artifact]
     if not tables:
         tables = fallback_tables(turn)
@@ -316,6 +329,10 @@ async def run_chat(graph, message: str, history: list[tuple[str, str]],
             for d in m.artifact:
                 if d["citation"] not in seen:
                     seen.add(d["citation"])
-                    sources.append({"title": d["title"], "heading": d["heading"], "citation": d["citation"]})
+                    url = d.get("url", "")
+                    sources.append({"title": d["title"], "heading": d["heading"], "citation": d["citation"],
+                                    "name": d.get("source_name", ""),
+                                    # 화면에서 링크로 여는 주소는 http(s)만 넘긴다
+                                    "url": url if url.startswith(("https://", "http://")) else ""})
     return ChatTurn(reply=reply, intent=result.get("intent"), tables=tables, messages=turn, sources=sources,
                     trace_id=trace_id)
