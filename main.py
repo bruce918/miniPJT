@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
 import auth
+import guardrails
 from arrivals_api import refresh_arrivals
 from chat_graph import build_chat_graph, run_chat
 from observability import send_feedback, tracing_enabled
@@ -30,13 +31,13 @@ BASE_DIR = Path(__file__).parent
 
 
 class Message(BaseModel):
-    role: str  # "user" | "assistant"
-    content: str
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=4000)
 
 
 class ChatRequest(BaseModel):
     message: str
-    history: list[Message] = []
+    history: list[Message] = Field(default=[], max_length=40)  # 클라이언트가 보내는 값이라 길이를 제한한다
     session_id: str | None = Field(default=None, max_length=64)  # 대화 ID (LangSmith Threads로 묶임)
     client: Literal["web", "test", "telegram"] = "web"           # 트레이스 구분용 (run_tests.py는 test, 텔레그램 봇은 telegram)
 
@@ -47,6 +48,8 @@ class ChatResponse(BaseModel):
     tables: list[dict] = []    # render_table 도구가 만든 표 (UI가 그린다. 각 표의 text는 평문 버전)
     sources: list[dict] = []   # 정책 답변의 근거 문서 출처 (retrieve_docs 결과)
     trace_id: str | None = None  # LangSmith 루트 실행 ID (피드백·디버깅용)
+    # 가드레일 결과: pii=가린 개인정보 종류, masked=가린 질문(화면이 대화 기록에 이 값을 쓴다), blocked=차단 여부
+    guard: dict | None = None
 
 
 class FeedbackRequest(BaseModel):
@@ -100,19 +103,31 @@ def error_reply(e: Exception) -> str:
 
 
 async def generate_reply(message: str, history: list[Message], source: str, session_id: str | None) -> ChatResponse:
+    # 입력 가드레일: 인젝션은 모델을 부르지 않고 막고, 개인정보는 가린 문장으로만 모델·트레이스에 보낸다
+    checked = guardrails.check_input(message)
+    if checked.blocked:
+        print(f"[가드레일] 프롬프트 인젝션 차단 ({checked.blocked}, source={source})")  # 질문 내용은 남기지 않는다
+        return ChatResponse(reply=guardrails.BLOCKED_REPLY, intent="blocked",
+                            guard={"blocked": True, "pii": checked.pii, "masked": checked.text})
+    past, dropped = guardrails.clean_history([(m.role, m.content) for m in history])
+    if dropped:
+        print(f"[가드레일] 대화 기록에서 인젝션 메시지 {dropped}건 제외 (source={source})")
+
     try:
         graph = await get_graph()
     except RuntimeError as e:
         return ChatResponse(reply=str(e))
 
     try:
-        turn = await run_chat(graph, message, [(m.role, m.content) for m in history],
-                              source=source, session_id=session_id)
+        turn = await run_chat(graph, checked.text, past, source=source, session_id=session_id,
+                              guard_tags=[f"guard:pii:{k}" for k in checked.pii]
+                              + (["guard:history_dropped"] if dropped else []))
     except Exception as e:
         print(f"그래프 오류: {type(e).__name__}: {e}")
         return ChatResponse(reply=error_reply(e))
+    guard = {"blocked": False, "pii": checked.pii, "masked": checked.text} if checked.pii else None
     return ChatResponse(reply=turn.reply, intent=turn.intent, tables=turn.tables, sources=turn.sources,
-                        trace_id=turn.trace_id)
+                        trace_id=turn.trace_id, guard=guard)
 
 
 @app.get("/")

@@ -663,7 +663,7 @@
       const col = el("div", "col");
       row.appendChild(col);
       messagesEl.appendChild(row);
-      bubbleLine(col, "me", text, true);
+      return bubbleLine(col, "me", text, true);
     }
 
     function addNotice(text, error) {
@@ -1027,7 +1027,7 @@
     async function send(text, selectedNo, opts = {}) {
       const query = opts.query || text;
       const picked = selectedNo ?? (opts.query ? null : pickedNo(text));
-      addMine(text);
+      const mine = addMine(text);
       setBusy(true);
       const col = botGroup();
       const typing = typingIndicator(col);
@@ -1040,6 +1040,14 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         typing.remove();
+        // 가드레일이 개인정보를 가렸으면 내 말풍선도 가린 문장으로 바꾸고, 대화 기록에도 가린 문장만 남긴다
+        const guard = data.guard || {};
+        let sentQuery = query;
+        if (guard.pii && guard.pii.length) {
+          if (!opts.query) mine.querySelector(".bubble").textContent = guard.masked;
+          sentQuery = guard.masked;
+          addNotice(`개인정보(${guard.pii.join(", ")})는 가려서 처리했어요. 대화창에 개인정보를 입력하지 마세요.`);
+        }
         const tables = data.tables || [];
         // 도착 표가 왔으면(후보 선택·정류소 ID 직접 조회 등) 모델의 요약 말풍선 없이 표부터 보여 준다.
         // (도착 표가 없으면 — 지금 오는 버스 없음·오류·정책 답변 등 — 말풍선이 유일한 답이라 그대로 보여 준다)
@@ -1067,7 +1075,8 @@
         // 다음 질문에서 "4번"처럼 고를 수 있게 표의 평문(정류소 ID 포함)도 대화 기록에 남긴다
         // 다시 보여 준 후보 목록도 넣는다: 서버는 최근 대화만 보므로 처음 목록이 밀려나도 번호로 고를 수 있게
         const content = [data.reply, ...shown.map((t) => t.title + "\n" + t.text)].join("\n\n");
-        history.push({ role: "user", content: query }, { role: "assistant", content });
+        // 차단된 질문은 기록에 남기지 않는다 (다음 질문 맥락에 섞이지 않게)
+        if (!guard.blocked) history.push({ role: "user", content: sentQuery }, { role: "assistant", content });
       } catch (err) {
         col.closest(".row").remove();
         addNotice("응답을 받지 못했어요 (" + err.message + ")", true);

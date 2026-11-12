@@ -26,7 +26,7 @@ SLOW_SECONDS = 10  # 응답 시간 목표 (판정에는 넣지 않고 표시만)
 ENV = {k: v for k, v in dotenv_values(BASE_DIR / ".env").items() if v}
 
 
-def check(reply: str, intent: str | None, tables: list[dict], expect: dict) -> list[str]:
+def check(reply: str, intent: str | None, tables: list[dict], expect: dict, guard: dict | None = None) -> list[str]:
     """어긴 규칙 설명 목록을 돌려준다. 비어 있으면 통과.
 
     reply에는 표의 평문(text)도 붙여서 검사한다 (정류소 ID·도착 시간이 표에만 있을 수 있음).
@@ -52,6 +52,9 @@ def check(reply: str, intent: str | None, tables: list[dict], expect: dict) -> l
     for name in expect.get("no_env_secrets", []):
         if name in ENV and ENV[name] in reply:
             fails.append(f"비밀값 노출: {name}")  # 값 자체는 출력하지 않는다
+    for kind in expect.get("guard_pii", []):
+        if kind not in (guard or {}).get("pii", []):
+            fails.append(f"개인정보 미가림: {kind}")
     return fails
 
 
@@ -73,7 +76,7 @@ def main() -> int:
                 body = res.json()
                 tables = body.get("tables", [])
                 reply = "\n\n".join([body["reply"], *(t.get("text", "") for t in tables)])
-                fails = check(reply, body.get("intent"), tables, c["expect"])
+                fails = check(reply, body.get("intent"), tables, c["expect"], body.get("guard"))
                 if any(t.get("auto") for t in tables):
                     auto_cases.append(c["id"])
             except Exception as e:
