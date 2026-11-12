@@ -19,7 +19,9 @@ from uuid import UUID
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from starlette.middleware.sessions import SessionMiddleware
 
+import auth
 from arrivals_api import refresh_arrivals
 from chat_graph import build_chat_graph, run_chat
 from observability import send_feedback, tracing_enabled
@@ -68,6 +70,9 @@ async def get_graph():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    auth.init_db()
+    if not auth.enabled():
+        print("[안내] GOOGLE_CLIENT_ID/SECRET·SESSION_SECRET이 없어 로그인 없이 실행합니다 (즐겨찾기는 브라우저에만 저장).")
     try:
         await get_graph()
         print("버스 MCP 서버 연결 완료, 챗 그래프 준비 완료")
@@ -77,6 +82,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="miniPJT 버스 챗봇", lifespan=lifespan)
+# 구글 로그인 과정의 임시 값(state·nonce·PKCE)만 담는 서명 쿠키. 로그인 상태 자체는 auth의 세션 쿠키가 맡는다.
+app.add_middleware(SessionMiddleware, secret_key=auth.SESSION_SECRET or "login-disabled",
+                   session_cookie="ggbus_oauth", max_age=600, same_site="lax")
+app.include_router(auth.router)
 
 
 def error_reply(e: Exception) -> str:

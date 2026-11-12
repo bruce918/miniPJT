@@ -14,3 +14,5 @@ eval_results/
 .rag_index/
 # 다음 정류장 캐시 (next_stop.py)
 .cache/
+# 사용자·세션·즐겨찾기 DB (auth.py)
+data/

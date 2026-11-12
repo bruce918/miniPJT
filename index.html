@@ -116,6 +116,54 @@
     .icon-btn svg { width: 20px; height: 20px; }
     .icon-btn[hidden] { display: none; }
 
+    /* ---------- 계정 (구글 로그인) ---------- */
+    header { position: relative; }
+    .account-btn .initial {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: var(--avatar);
+      color: #3a2e00;
+      font-size: 13px;
+      font-weight: 700;
+      display: grid;
+      place-items: center;
+    }
+    .account-menu {
+      position: absolute;
+      top: calc(100% - 4px);
+      right: 12px;
+      z-index: 15;
+      width: 250px;
+      padding: 14px;
+      border-radius: 14px;
+      background: var(--bar);
+      color: var(--text);
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+    }
+    .account-menu[hidden] { display: none; }
+    .account-menu strong { display: block; font-size: 15px; }
+    .account-menu p { margin: 4px 0 12px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+    .account-menu .google-btn, .account-menu .logout-btn {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #1f1f1f;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .account-menu .google-btn:hover, .account-menu .logout-btn:hover { background: #f4f4f4; }
+    .account-menu .google-btn svg { width: 18px; height: 18px; }
+
     /* ---------- 즐겨찾기 ---------- */
     .fav-open { position: relative; color: #e0a800; }
     .fav-count {
@@ -500,6 +548,9 @@
         </svg>
         <span class="fav-count" id="fav-count">0</span>
       </button>
+      <button class="icon-btn account-btn" id="account-btn" type="button" title="로그인"
+              aria-label="로그인" aria-haspopup="true" aria-expanded="false" aria-controls="account-menu" hidden></button>
+      <div class="account-menu" id="account-menu" hidden></div>
       <button class="icon-btn" id="reset" type="button" title="대화 초기화" aria-label="대화 초기화">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" />
@@ -526,7 +577,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
         </button>
       </div>
-      <p class="sheet-hint">정류소를 누르면 바로 도착 정보를 보여 드려요.</p>
+      <p class="sheet-hint" id="fav-hint">정류소를 누르면 바로 도착 정보를 보여 드려요.</p>
       <ul class="fav-list" id="fav-list"></ul>
     </div>
   </div>
@@ -727,6 +778,7 @@
             const star = el("button", "star-btn");
             star.type = "button";
             star.dataset.id = String(row.id);
+            star.hidden = !loginEnabled;
             setStar(star, isFav(row.id));
             star.addEventListener("click", (e) => {
               e.stopPropagation();
@@ -850,13 +902,17 @@
       return (byMobile || byNo || {}).no ?? null;
     }
 
-    // ---------- 즐겨찾기 (이 브라우저의 localStorage에 저장) ----------
+    // ---------- 즐겨찾기 ----------
+    // 로그인하지 않았으면 이 브라우저의 localStorage에, 구글로 로그인했으면 서버(계정)에 저장한다.
 
     const FAV_KEY = "ggbus.favorites.v1";
     const favOpenBtn = document.getElementById("fav-open");
     const favCountEl = document.getElementById("fav-count");
     const favLayer = document.getElementById("fav-layer");
     const favList = document.getElementById("fav-list");
+    const favHint = document.getElementById("fav-hint");
+    let user = null;            // 로그인한 사용자 {name} (없으면 null)
+    let loginEnabled = false;   // 서버에 구글 로그인이 설정되어 있는지
 
     function loadFavs() {
       try {
@@ -866,34 +922,46 @@
         return [];
       }
     }
-    let favorites = loadFavs();
-
-    function saveFavs() {
-      try {
-        localStorage.setItem(FAV_KEY, JSON.stringify(favorites));
-      } catch {
-        // 저장할 수 없는 환경(사생활 보호 모드 등)이면 이번 창에서만 유지된다
-      }
-      refreshFavUI();
-    }
+    // 즐겨찾기는 로그인한 사용자만 쓴다 (서버 계정에 저장). localStorage는 예전에 브라우저에 저장해 둔 목록을
+    // 처음 로그인할 때 계정으로 옮기는 데만 읽는다 (loadFavs).
+    let favorites = [];
 
     const isFav = (id) => favorites.some((f) => f.id === String(id));
 
-    function toggleFav(row) {
-      const id = String(row.id);
-      if (isFav(id)) {
-        favorites = favorites.filter((f) => f.id !== id);
-      } else {
-        favorites.push({ id, name: row.name, mobile: String(row.mobile || ""), city: row.city || "", next: row.next || "" });
+    async function toggleFav(row) {
+      if (!user) {
+        // 로그인하지 않았으면 저장하지 않고 로그인 메뉴를 연다
+        setMenu(true);
+        return;
       }
-      saveFavs();
+      const id = String(row.id);
+      const removing = isFav(id);
+      const item = { name: row.name, mobile: String(row.mobile || ""), city: row.city || "", next: row.next || "" };
+      const before = favorites;
+      favorites = removing ? favorites.filter((f) => f.id !== id) : [...favorites, { id, ...item }];
+      refreshFavUI();  // 화면은 바로 바꾸고, 서버 저장이 실패하면 되돌린다
+      try {
+        const res = await fetch(`/api/favorites/${id}`, {
+          method: removing ? "DELETE" : "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: removing ? undefined : JSON.stringify(item),
+        });
+        if (res.status === 401) return sessionExpired();
+        const data = await res.json();
+        if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "");
+        favorites = data.items;
+      } catch (e) {
+        favorites = before;
+        addNotice(e.message || "즐겨찾기를 저장하지 못했어요. 잠시 후 다시 시도해 주세요.", true);
+      }
+      refreshFavUI();
     }
 
     function setStar(btn, on) {
       btn.textContent = on ? "★" : "☆";
       btn.classList.toggle("on", on);
       btn.setAttribute("aria-pressed", on ? "true" : "false");
-      btn.title = on ? "즐겨찾기 해제" : "즐겨찾기 추가";
+      btn.title = !user ? "로그인하면 즐겨찾기를 쓸 수 있어요" : on ? "즐겨찾기 해제" : "즐겨찾기 추가";
       btn.setAttribute("aria-label", btn.title);
     }
 
@@ -901,7 +969,11 @@
     function refreshFavUI() {
       favOpenBtn.hidden = favorites.length === 0;
       favCountEl.textContent = favorites.length;
-      document.querySelectorAll(".star-btn[data-id]").forEach((b) => setStar(b, isFav(b.dataset.id)));
+      favHint.textContent = "정류소를 누르면 바로 도착 정보를 보여 드려요. 계정에 저장되어 다른 기기에서도 보여요.";
+      document.querySelectorAll(".star-btn[data-id]").forEach((b) => {
+        b.hidden = !loginEnabled;  // 서버에 로그인이 설정되지 않았으면 즐겨찾기 자체를 숨긴다
+        setStar(b, isFav(b.dataset.id));
+      });
       if (!favLayer.hidden) renderFavList();
     }
 
@@ -1036,8 +1108,124 @@
       input.focus();
     });
 
+    // ---------- 계정 (구글 로그인) ----------
+    // 로그인 상태는 서버의 HttpOnly 세션 쿠키가 들고 있어 화면은 /api/me로 묻기만 한다.
+
+    const accountBtn = document.getElementById("account-btn");
+    const accountMenu = document.getElementById("account-menu");
+    const GOOGLE_SVG = '<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.9 6.1C12.5 13.6 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.8c4.3-4 6.9-9.9 6.9-17.2z"/><path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.7 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.8-5.8l-7.4-5.8c-2.1 1.4-4.8 2.3-8.4 2.3-6.2 0-11.5-4.1-13.4-9.8l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>';
+    const PERSON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>';
+
+    function renderAccount() {
+      accountBtn.hidden = !loginEnabled;
+      accountBtn.replaceChildren();
+      if (user) {
+        accountBtn.appendChild(el("span", "initial", (user.name || "?").trim().charAt(0).toUpperCase()));
+        accountBtn.title = `${user.name}님 계정`;
+      } else {
+        accountBtn.innerHTML = PERSON_SVG;
+        accountBtn.title = "로그인";
+      }
+      accountBtn.setAttribute("aria-label", accountBtn.title);
+
+      accountMenu.replaceChildren();
+      if (user) {
+        accountMenu.appendChild(el("strong", "", `${user.name}님`));
+        accountMenu.appendChild(el("p", "", "Google 계정으로 로그인했어요. 즐겨찾기가 계정에 저장돼요."));
+        const out = el("button", "logout-btn", "로그아웃");
+        out.type = "button";
+        out.addEventListener("click", logout);
+        accountMenu.appendChild(out);
+      } else {
+        accountMenu.appendChild(el("strong", "", "로그인"));
+        accountMenu.appendChild(el("p", "", "즐겨찾기는 로그인한 뒤에 쓸 수 있어요. 계정에 저장되어 어느 기기에서나 같은 목록을 볼 수 있어요."));
+        const a = el("a", "google-btn");
+        a.href = "/auth/google/login";
+        a.innerHTML = GOOGLE_SVG;
+        a.appendChild(document.createTextNode("Google 계정으로 로그인"));
+        accountMenu.appendChild(a);
+      }
+    }
+
+    function setMenu(open) {
+      accountMenu.hidden = !open;
+      accountBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+    accountBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setMenu(accountMenu.hidden);
+    });
+    document.addEventListener("click", (e) => {
+      if (!accountMenu.hidden && !accountMenu.contains(e.target)) setMenu(false);
+    });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !accountMenu.hidden) setMenu(false); });
+
+    // 로그아웃·세션 만료 뒤에는 즐겨찾기를 비운다 (로그인해야 다시 보인다)
+    function toLoggedOut() {
+      user = null;
+      favorites = [];
+      if (!favLayer.hidden) closeFavs();
+      renderAccount();
+      refreshFavUI();
+    }
+
+    function sessionExpired() {
+      toLoggedOut();
+      addNotice("로그인이 만료됐어요. 다시 로그인해 주세요.", true);
+    }
+
+    async function logout() {
+      setMenu(false);
+      try {
+        await fetch("/auth/logout", { method: "POST" });
+      } catch {
+        // 서버에 못 닿아도 화면은 로그아웃 상태로 바꾼다 (쿠키는 다음 로그인 때 새로 발급)
+      }
+      toLoggedOut();
+      addNotice("로그아웃했어요.");
+    }
+
+    async function initAccount() {
+      const result = new URLSearchParams(location.search).get("login");
+      if (result) window.history.replaceState(null, "", location.pathname);  // ?login=ok 를 주소창에서 지운다
+      try {
+        const me = await (await fetch("/api/me")).json();
+        loginEnabled = !!me.login_enabled;
+        user = me.user || null;
+      } catch {
+        return;  // 서버에 못 닿으면 로그인 없이 쓴다
+      }
+      if (user) {
+        // 이 브라우저에만 있던 즐겨찾기를 계정으로 합치고 로컬 사본은 비운다
+        const local = loadFavs().filter((f) => /^\d{9}$/.test(f.id)).slice(0, 100);
+        try {
+          const res = local.length
+            ? await fetch("/api/favorites/merge", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ items: local }),
+              })
+            : await fetch("/api/favorites");
+          if (res.status === 401) return sessionExpired();
+          if (!res.ok) throw new Error();
+          favorites = (await res.json()).items;
+          if (local.length) {
+            try { localStorage.removeItem(FAV_KEY); } catch {}
+            addNotice(`이 브라우저의 즐겨찾기 ${local.length}곳을 계정에 합쳤어요.`);
+          }
+        } catch {
+          addNotice("계정 즐겨찾기를 불러오지 못했어요. 새로고침해 주세요.", true);
+        }
+      }
+      if (result === "failed") addNotice("Google 로그인에 실패했어요. 다시 시도해 주세요.", true);
+      else if (result === "ok" && user) addNotice(`${user.name}님, 로그인했어요.`);
+      renderAccount();
+      refreshFavUI();
+    }
+
     welcome();
     refreshFavUI();
+    initAccount();
   </script>
 </body>
 </html>

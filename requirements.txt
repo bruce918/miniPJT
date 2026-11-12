@@ -16,3 +16,5 @@ botocore
 kiwipiepy        # 한국어 형태소 분석 (BM25 토큰화)
 rank-bm25
 PyYAML
+Authlib
+itsdangerous
