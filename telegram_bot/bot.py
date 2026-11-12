@@ -104,6 +104,12 @@ class Bot:
             return
 
         reply, tables, sources = data.get("reply", ""), data.get("tables", []), data.get("sources", [])
+        guard = data.get("guard") or {}
+        if guard.get("pii"):
+            # 서버 가드레일이 개인정보를 가렸으면 알려 주고, 기록에도 가린 문장만 남긴다
+            await self.send(chat_id, render.escape(f"🔒 개인정보({', '.join(guard['pii'])})는 가려서 처리했어요. "
+                                                   "채팅에 개인정보를 보내지 마세요."))
+            query = guard.get("masked") or query
         stations = next((t for t in tables if t.get("kind") == "stations"), None)
         arrivals = next((t for t in tables if t.get("kind") == "arrivals"), None)
         if arrivals:
@@ -115,6 +121,8 @@ class Bot:
                                   render.stations_buttons(stations), render.stations_message(stations, reply))
         else:
             await self.send(chat_id, *render.reply_message(reply, sources, data.get("intent") == "policy_qa"))
+        if guard.get("blocked"):
+            return  # 차단된 질문은 기록에 남기지 않는다
         histories[chat_id].extend([
             {"role": "user", "content": query},
             {"role": "assistant", "content": render.history_content(reply, tables)},
