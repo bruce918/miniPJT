@@ -233,7 +233,7 @@
 
     /* ---------- 표 카드 ---------- */
     .table-card {
-      width: min(560px, 100%);
+      width: min(660px, 100%);
       border-radius: 14px;
       overflow: hidden;
       background: var(--card);
@@ -268,6 +268,11 @@
     .table-card.clickable tbody tr { cursor: pointer; }
     .table-card.clickable tbody tr:hover { background: var(--hover); }
     .table-card .route { font-weight: 800; color: var(--accent); }
+    .table-card td.col-next { color: var(--muted); }
+    /* 긴 정류소·다음 정류장 이름은 칸 안에서 줄바꿈 (넓은 화면에서도 가로 넘침 없게) */
+    .table-card td.col-name, .table-card td.col-next { white-space: normal; word-break: keep-all; max-width: 170px; }
+    .table-card .next-inline { display: none; }
+    .table-card td.col-next:not(:empty)::before { content: "→ "; color: var(--soft); }
     .table-card .soon { color: var(--soon); font-weight: 700; }
     .table-card .eta { display: block; font-weight: 700; }
     .table-card .stops { display: block; font-size: 11.5px; color: var(--muted); }
@@ -286,8 +291,10 @@
     @media (max-width: 560px) {
       .table-card table { font-size: 12.5px; }
       .table-card th, .table-card td { padding: 7px 8px; }
-      .table-card .col-id, .table-card .col-info { display: none; }
-      .table-card .col-dest, .table-card .col-name {
+      .table-card .col-id, .table-card .col-info, .table-card .col-next { display: none; }
+      .table-card .next-inline { display: block; margin-top: 2px; font-size: 11.5px; color: var(--muted); }
+      .table-card .col-name { max-width: 150px; }
+      .table-card .col-dest, .table-card .col-name, .table-card .col-next {
         white-space: normal; word-break: keep-all; overflow-wrap: anywhere; min-width: 64px; max-width: 92px;
       }
       .table-card .badge.soon { display: block; width: fit-content; margin: 0 0 2px; }
@@ -547,6 +554,11 @@
           tr.addEventListener("click", () => {
             if (!busy) send(row.no + "번", row.no);
           });
+          if (row.next) {
+            // 폰 폭에서는 '다음 정류장' 칸 대신 정류소 이름 아래에 작게 보여 준다 (CSS가 둘 중 하나만 보이게 함)
+            const nameCell = tr.querySelector(".col-name");
+            if (nameCell) nameCell.appendChild(el("span", "next-inline", "→ " + row.next));  // 화살표가 따로 줄바꿈되지 않게
+          }
           if (opts.selectedNo === row.no) {
             // 방금 도착 정보를 본 정류소
             tr.classList.add("selected");

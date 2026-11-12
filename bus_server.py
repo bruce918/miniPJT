@@ -19,6 +19,8 @@ import requests
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 
+import next_stop
+
 load_dotenv()
 
 mcp = FastMCP("gg-bus")
@@ -138,7 +140,7 @@ def search_bus_station(name: str, city: str = "") -> str:
         hits = [s for s in pool if s["mobile"] == name] or [s for s in pool if s["id"] == name]
         if not hits:
             return f"정류소번호 '{name}'인 정류소를 찾지 못했습니다. 경기도 내 정류소만 조회할 수 있습니다."
-        return _dump(hits[:MAX_STATIONS])
+        return _dump(_with_next_stop(hits[:MAX_STATIONS]))
     # 이름이 정확히 같은 것 -> 이름으로 시작하는 것 -> 이름이 포함된 것 순으로 보여 줍니다
     exact = [s for s in pool if s["name"] == name]
     starts = [s for s in pool if s["name"].startswith(name) and s["name"] != name]
@@ -148,7 +150,18 @@ def search_bus_station(name: str, city: str = "") -> str:
         return (f"'{name}' 정류소를 찾지 못했습니다. 경기도 내 정류소만 조회할 수 있으니 "
                 "경기도 정류소 이름을 입력하도록 안내하세요 (이름을 줄여 입력해도 됩니다).")
     note = f"(총 {len(hits)}건 중 {MAX_STATIONS}건)\n" if len(hits) > MAX_STATIONS else ""
-    return note + _dump(hits[:MAX_STATIONS])
+    return note + _dump(_with_next_stop(hits[:MAX_STATIONS]))
+
+
+def _with_next_stop(hits: list[dict]) -> list[dict]:
+    """후보가 2곳 이상이면 방향 구분용 '다음 정류장'(next)을 붙인다. 모르면 붙이지 않는다.
+
+    정류소 목록 캐시의 dict를 바꾸지 않도록 복사해서 돌려준다.
+    """
+    if len(hits) < 2:
+        return hits
+    nexts = next_stop.lookup_many([s["id"] for s in hits])
+    return [{**s, "next": nexts[s["id"]]} if nexts.get(s["id"]) else dict(s) for s in hits]
 
 
 @mcp.tool()

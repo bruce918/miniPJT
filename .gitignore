@@ -12,3 +12,5 @@ skills-lock.json
 eval_results/
 # RAG 임베딩 캐시 (rag.py)
 .rag_index/
+# 다음 정류장 캐시 (next_stop.py)
+.cache/

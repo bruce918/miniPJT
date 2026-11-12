@@ -62,20 +62,30 @@ def _num(v):
 
 def stations_table(title: str, stations: list[dict], total: int | None = None) -> dict:
     rows = [
-        {"no": i, "name": s["name"], "city": s.get("city", ""), "mobile": s.get("mobile", ""), "id": s["id"]}
+        {"no": i, "name": s["name"], "next": s.get("next", ""), "city": s.get("city", ""),
+         "mobile": s.get("mobile", ""), "id": s["id"]}
         for i, s in enumerate(stations, 1)
     ]
-    text = "\n".join(f"{r['no']}. {r['name']} ({r['city']}, 정류소번호 {r['mobile']}, ID {r['id']})" for r in rows)
+    # 다음 정류장(방향 구분)은 MCP 서버가 알아냈을 때만 칸을 만든다
+    has_next = any(r["next"] for r in rows)
+    text = "\n".join(
+        f"{r['no']}. {r['name']} ({r['city']}, "
+        + (f"다음 정류장 {r['next']}, " if r["next"] else "")
+        + f"정류소번호 {r['mobile']}, ID {r['id']})"
+        for r in rows
+    )
+    columns = [
+        {"key": "no", "label": "번호", "align": "center"},
+        {"key": "name", "label": "정류소"},
+        *([{"key": "next", "label": "다음 정류장"}] if has_next else []),
+        {"key": "city", "label": "시군"},
+        {"key": "mobile", "label": "정류소번호", "align": "center"},
+        {"key": "id", "label": "정류소 ID", "align": "center"},
+    ]
     return {
         "kind": "stations",
         "title": title,
-        "columns": [
-            {"key": "no", "label": "번호", "align": "center"},
-            {"key": "name", "label": "정류소"},
-            {"key": "city", "label": "시군"},
-            {"key": "mobile", "label": "정류소번호", "align": "center"},
-            {"key": "id", "label": "정류소 ID", "align": "center"},
-        ],
+        "columns": columns,
         "rows": rows,
         "note": (f"총 {total}곳 중 {len(rows)}곳만 보여 드려요. 원하는 곳이 없으면 이름을 더 자세히 입력해 주세요. " if total and total > len(rows) else "")
                 + "행을 누르면 그 정류소를 고릅니다.",
