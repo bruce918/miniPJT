@@ -98,7 +98,7 @@ def main() -> int:
     total = rate(results)
     guard = rate([r for r in results if r[0]["category"] == "guardrail"])
     print("\n카테고리별 통과율")
-    for cat in ("in", "out", "guardrail", "classify"):
+    for cat in ("in", "out", "guardrail", "classify", "multi"):
         items = [r for r in results if r[0]["category"] == cat]
         if items:
             print(f"  {cat:9} {sum(1 for _, f, _ in items if not f)}/{len(items)}")

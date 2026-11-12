@@ -329,6 +329,31 @@
         ],
         "table": "stations"
       }
+    },
+    {
+      "id": "multi-01",
+      "category": "multi",
+      "note": "복합 질문(도착+요금) -> 후보가 여러 곳이면 후보 표에서 멈추고 남은 질문(요금)은 고른 뒤 이어서 답한다고 예고",
+      "message": "미금역 버스 언제 와? 그리고 청소년 버스비도 알려줘",
+      "expect": {
+        "intent": "bus_arrival",
+        "table": "stations",
+        "contains_all": [
+          "이어서"
+        ],
+        "not_regex": "\\d+\\s*분 후"
+      }
+    },
+    {
+      "id": "multi-02",
+      "category": "multi",
+      "note": "복합 질문(정류소 ID 도착 + 환승 규칙) -> 멈출 일이 없으니 도착 표와 정책 답을 한 번에",
+      "message": "정류소 ID 206000222 버스 언제 와? 그리고 환승은 몇 분 안에 해야 할인돼?",
+      "expect": {
+        "intent": "multi",
+        "table": "arrivals",
+        "regex": "30\\s*분"
+      }
     }
   ]
 }

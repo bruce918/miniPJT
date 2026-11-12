@@ -107,7 +107,18 @@ def run() -> int:
     if check_output("키는 sk-test-0123456789abcdef 입니다").leak != "secret":
         fails.append("비밀값 유출 미검출")
 
-    total = len(PII_CASES) + len(NOT_PII) + len(INJECTION) + len(NOT_INJECTION) + 9
+    # 요금 합계 교정 (calc_tool.fix_totals): 틀린 합계만 고치고 맞는 식·다른 숫자는 그대로
+    from calc_tool import fix_totals
+    for text, want in [("현금이면 어린이 900원×2 + 성인 1,700원×3 = 6,300원입니다.", "6,900원"),
+                       ("성인 1,650원 × 3명 + 어린이 830원 × 2명 = 6,310원", "6,610원"),
+                       ("어린이(830원) 2명 + 성인(1,650원) 3명 = 6,610원", "6,610원")]:
+        if want not in fix_totals(text)[0]:
+            fails.append(f"합계 교정 실패: {text!r} -> {fix_totals(text)[0]!r}")
+    for text in ["일반형 1,650원, 좌석 2,650원입니다.", "2026-11-12 기준 = 1,650원", "7079 정류소 = 3분 후"]:
+        if fix_totals(text)[1]:
+            fails.append(f"합계 교정 오탐: {text!r}")
+
+    total = len(PII_CASES) + len(NOT_PII) + len(INJECTION) + len(NOT_INJECTION) + 15
     for f in fails:
         print("FAIL", f)
     print(f"{total - len(fails)}/{total} 통과")

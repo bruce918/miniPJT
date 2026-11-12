@@ -11,23 +11,30 @@
 """
 
 import asyncio
+import hashlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
 import auth
 import guardrails
+import memory
 from arrivals_api import refresh_arrivals
 from chat_graph import build_chat_graph, run_chat
 from observability import send_feedback, tracing_enabled
 
 BASE_DIR = Path(__file__).parent
+
+
+def ui_version() -> str:
+    """화면 파일(index.html)의 버전. 열려 있는 페이지가 예전 화면이면 새로고침을 안내하는 데 쓴다."""
+    return hashlib.sha256((BASE_DIR / "index.html").read_bytes()).hexdigest()[:12]
 
 
 class Message(BaseModel):
@@ -50,6 +57,10 @@ class ChatResponse(BaseModel):
     trace_id: str | None = None  # LangSmith 루트 실행 ID (피드백·디버깅용)
     # 가드레일 결과: pii=가린 개인정보 종류, masked=가린 질문(화면이 대화 기록에 이 값을 쓴다), blocked=차단 여부
     guard: dict | None = None
+    ui_version: str | None = None  # 지금 서버의 화면 버전 (페이지가 예전 것이면 새로고침 안내)
+    # Plan-Execute: 단계별 결과(화면이 차례로 그린다)와 이번 턴의 계획. 단계가 하나면 parts도 하나다.
+    parts: list[dict] = []
+    plan: list[dict] = []
 
 
 class FeedbackRequest(BaseModel):
@@ -102,7 +113,20 @@ def error_reply(e: Exception) -> str:
     return f"조회 중 오류가 났습니다 ({type(e).__name__}). 잠시 후 다시 시도해 주세요."
 
 
-async def generate_reply(message: str, history: list[Message], source: str, session_id: str | None) -> ChatResponse:
+def memory_key(request: Request, client: str, session_id: str | None) -> str | None:
+    """장기 메모리 키: 로그인한 웹 사용자와 텔레그램 채팅만 기억한다 (비로그인 웹·테스트는 기억하지 않음)."""
+    if client == "test":
+        return None
+    user = auth.current_user(request)
+    if user:
+        return f"user:{user['id']}"
+    if client == "telegram" and session_id:
+        return f"tg:{session_id}"
+    return None
+
+
+async def generate_reply(message: str, history: list[Message], source: str, session_id: str | None,
+                         user_key: str | None = None) -> ChatResponse:
     # 입력 가드레일: 인젝션은 모델을 부르지 않고 막고, 개인정보는 가린 문장으로만 모델·트레이스에 보낸다
     checked = guardrails.check_input(message)
     if checked.blocked:
@@ -121,13 +145,14 @@ async def generate_reply(message: str, history: list[Message], source: str, sess
     try:
         turn = await run_chat(graph, checked.text, past, source=source, session_id=session_id,
                               guard_tags=[f"guard:pii:{k}" for k in checked.pii]
-                              + (["guard:history_dropped"] if dropped else []))
+                              + (["guard:history_dropped"] if dropped else []),
+                              user_key=user_key)
     except Exception as e:
         print(f"그래프 오류: {type(e).__name__}: {e}")
         return ChatResponse(reply=error_reply(e))
     guard = {"blocked": False, "pii": checked.pii, "masked": checked.text} if checked.pii else None
     return ChatResponse(reply=turn.reply, intent=turn.intent, tables=turn.tables, sources=turn.sources,
-                        trace_id=turn.trace_id, guard=guard)
+                        trace_id=turn.trace_id, guard=guard, parts=turn.parts, plan=turn.plan)
 
 
 @app.get("/")
@@ -137,11 +162,40 @@ def index() -> FileResponse:
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest) -> ChatResponse:
+async def chat(req: ChatRequest, request: Request) -> ChatResponse:
     message = req.message.strip()
     if not message:
-        return ChatResponse(reply="정류소 이름을 알려 주세요 (예: 미금역).")
-    return await generate_reply(message[:500], req.history, req.client, req.session_id)
+        return ChatResponse(reply="정류소 이름을 알려 주세요 (예: 미금역).", ui_version=ui_version())
+    res = await generate_reply(message[:500], req.history, req.client, req.session_id,
+                               memory_key(request, req.client, req.session_id))
+    res.ui_version = ui_version()
+    return res
+
+
+def _memory_owner(request: Request, session_id: str | None) -> str:
+    """기억을 보거나 지울 대상: 로그인 사용자, 아니면 텔레그램 채팅(session_id가 tg-로 시작)."""
+    user = auth.current_user(request)
+    if user:
+        return f"user:{user['id']}"
+    if session_id and session_id.startswith("tg-"):
+        return f"tg:{session_id}"
+    raise HTTPException(401, "로그인이 필요합니다.")
+
+
+@app.get("/api/memory")
+async def get_memory(request: Request, session_id: str | None = Query(default=None, max_length=64)) -> dict:
+    """버스봇이 기억하는 내용 (장기 메모리)."""
+    mem = await memory.load(await memory.get_store(), _memory_owner(request, session_id))
+    return {"summary": memory.summarize(mem), "profile": mem.get("profile") or {},
+            "stations": [{"id": k, "name": v.get("name"), "count": v.get("count")}
+                         for k, v in sorted((mem.get("stations") or {}).items(), key=lambda kv: -kv[1].get("count", 0))]}
+
+
+@app.delete("/api/memory", dependencies=[Depends(auth.same_origin)])
+async def delete_memory(request: Request, session_id: str | None = Query(default=None, max_length=64)) -> dict:
+    """버스봇의 기억을 모두 지운다."""
+    removed = await memory.forget(await memory.get_store(), _memory_owner(request, session_id))
+    return {"ok": True, "removed": removed}
 
 
 @app.post("/api/feedback")
@@ -168,4 +222,5 @@ async def arrivals(station_id: str = Query(pattern=r"^\d{9}$")) -> dict:
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok", "chat_graph": _graph is not None, "tracing": tracing_enabled()}
+    return {"status": "ok", "chat_graph": _graph is not None, "tracing": tracing_enabled(),
+            "ui_version": ui_version()}

@@ -10,6 +10,7 @@ langchain-core
 langchain-aws
 langchain-mcp-adapters>=0.3.2
 langgraph
+langgraph-checkpoint-sqlite
 botocore
 
 # RAG (rag.py: 정책 문서 하이브리드 검색)

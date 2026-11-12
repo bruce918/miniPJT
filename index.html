@@ -1042,18 +1042,31 @@
         typing.remove();
         // 가드레일이 개인정보를 가렸으면 내 말풍선도 가린 문장으로 바꾸고, 대화 기록에도 가린 문장만 남긴다
         const guard = data.guard || {};
+        // 서버의 화면이 바뀌었으면(이 페이지를 연 뒤 업데이트됨) 새로고침을 한 번 안내한다
+        if (pageVersion && data.ui_version && data.ui_version !== pageVersion && !staleNotified) {
+          staleNotified = true;
+          addNotice("버스봇 화면이 업데이트됐어요. 새로고침(F5)하면 새 기능이 제대로 보여요.", true);
+        }
         let sentQuery = query;
         if (guard.pii && guard.pii.length) {
           if (!opts.query) mine.querySelector(".bubble").textContent = guard.masked;
           sentQuery = guard.masked;
           addNotice(`개인정보(${guard.pii.join(", ")})는 가려서 처리했어요. 대화창에 개인정보를 입력하지 마세요.`);
         }
-        const tables = data.tables || [];
-        // 도착 표가 왔으면(후보 선택·정류소 ID 직접 조회 등) 모델의 요약 말풍선 없이 표부터 보여 준다.
-        // (도착 표가 없으면 — 지금 오는 버스 없음·오류·정책 답변 등 — 말풍선이 유일한 답이라 그대로 보여 준다)
-        const hasArrivalTable = tables.some((t) => t.kind === "arrivals");
-        if (!hasArrivalTable) bubbleLine(col, "bot", data.reply, true);
-        tables.forEach((t) => addTable(col, t));
+        // 복합 질문은 서버가 단계(parts)별 결과를 준다: 단계마다 말풍선·표·출처를 차례로 그린다
+        // (예: 오리역 도착 표 바로 아래에 성인 3명 요금 답변)
+        const parts = data.parts && data.parts.length
+          ? data.parts
+          : [{ intent: data.intent, reply: data.reply, tables: data.tables || [], sources: data.sources || [] }];
+        const tables = parts.flatMap((p) => p.tables || []);
+        parts.forEach((p, i) => {
+          // 도착 표가 왔으면(후보 선택·정류소 ID 직접 조회 등) 모델의 요약 말풍선 없이 표부터 보여 준다.
+          // (도착 표가 없으면 — 지금 오는 버스 없음·오류·정책 답변 등 — 말풍선이 유일한 답이라 그대로 보여 준다)
+          const partTables = p.tables || [];
+          if (!partTables.some((t) => t.kind === "arrivals")) bubbleLine(col, "bot", p.reply, i === 0);
+          partTables.forEach((t) => addTable(col, t));
+          addSources(col, p.sources || []);
+        });
         const shown = [...tables];
         const newStations = tables.find((t) => t.kind === "stations");
         if (newStations) {
@@ -1064,10 +1077,10 @@
           addTable(col, again, { selectedNo: picked });
           shown.push(again);
         }
-        addSources(col, data.sources || []);
         addFeedback(col, data.trace_id);
-        if (data.intent === "policy_qa") {
-          // 이용 방법 답변 뒤에는 최초 질문 메뉴로 돌아가 다음 질문을 바로 고를 수 있게 한다
+        if (parts.every((p) => p.intent === "policy_qa")) {
+          // 이용 방법만 물은 답 뒤에는 최초 질문 메뉴로 돌아가 다음 질문을 바로 고를 수 있게 한다.
+          // 도착 정보가 섞인 복합 답이면 메뉴 없이, 고른 정류소가 "조회함"으로 표시된 후보 표로 끝낸다.
           addMenu(botGroup(), "다른 것도 궁금하면 골라 보세요. 정류소 이름을 말하면 도착 정보를 알려 드려요.", true);
           // 메뉴가 길어 맨 아래로 내려가면 방금 받은 답이 가려지므로, 답변이 화면 위쪽에 오게 한다
           col.closest(".row").scrollIntoView({ block: "start" });
@@ -1231,6 +1244,11 @@
       renderAccount();
       refreshFavUI();
     }
+
+    // 이 페이지를 열 때의 화면 버전 (응답의 ui_version과 다르면 예전 화면이라는 뜻)
+    let pageVersion = null;
+    let staleNotified = false;
+    fetch("/api/health").then((r) => r.json()).then((h) => { pageVersion = h.ui_version || null; }).catch(() => {});
 
     welcome();
     refreshFavUI();
