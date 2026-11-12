@@ -2,44 +2,65 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>경기 버스 도착 챗봇</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>경기 버스 안내봇</title>
   <style>
     :root {
-      --bg: #f5f6f8;
-      --panel: #ffffff;
-      --text: #1f2328;
-      --muted: #6b7280;
-      --border: #e3e5e8;
-      --user: #2563eb;
-      --user-text: #ffffff;
-      --bot: #eef0f3;
-      --hover: #f3f6fd;
-      --soon: #dc2626;
-      --soon-bg: #fdecec;
-      --badge-bg: #eef0f3;
+      --room: #b2c7da;          /* 채팅방 배경 (하늘빛 회색) */
+      --bar: #ffffff;           /* 상단·입력 바 */
+      --text: #191919;
+      --muted: #556677;
+      --soft: #8a97a5;
+      --line: #e6e9ed;
+      --me: #fee500;            /* 내 말풍선 (노랑) */
+      --me-text: #191919;
+      --bot: #ffffff;           /* 봇 말풍선 */
+      --card: #ffffff;
+      --accent: #3b6fd8;        /* 노선 번호·링크 */
+      --soon: #e5484d;
+      --soon-bg: #ffecec;
+      --chip: rgba(255, 255, 255, 0.85);
+      --chip-text: #2b3a4a;
+      --badge-bg: #eef2f6;
+      --hover: #f4f7fb;
+      --picked-row: #fff9d6;
+      --avatar: #ffd84d;
+      --shadow: 0 1px 1.5px rgba(0, 0, 0, 0.08);
+      --notice: rgba(0, 0, 0, 0.16);
     }
     @media (prefers-color-scheme: dark) {
       :root {
-        --bg: #16181c;
-        --panel: #1e2126;
-        --text: #e6e8eb;
-        --muted: #9aa1ab;
-        --border: #2d3138;
-        --user: #3b82f6;
-        --bot: #2a2e35;
-        --hover: #262b33;
-        --soon: #f87171;
-        --soon-bg: #3a2222;
-        --badge-bg: #2d3138;
+        --room: #1e2a35;
+        --bar: #151d25;
+        --text: #eef1f4;
+        --muted: #a9b6c3;
+        --soft: #7d8b99;
+        --line: #2a3542;
+        --me: #f5d90a;
+        --me-text: #191919;
+        --bot: #2a3643;
+        --card: #24303c;
+        --accent: #7aa7ff;
+        --soon: #ff7b7f;
+        --soon-bg: #3c2428;
+        --chip: rgba(42, 54, 67, 0.9);
+        --chip-text: #e3e9ef;
+        --badge-bg: #33404d;
+        --hover: #2c3946;
+        --picked-row: #3a3a22;
+        --avatar: #e8c53d;
+        --shadow: 0 1px 1.5px rgba(0, 0, 0, 0.3);
+        --notice: rgba(0, 0, 0, 0.3);
       }
     }
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; }
     body {
-      background: var(--bg);
+      background: var(--room);
       color: var(--text);
-      font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+      font-family: "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, -apple-system, sans-serif;
+      font-size: 15px;
+      -webkit-font-smoothing: antialiased;
       display: flex;
       justify-content: center;
     }
@@ -49,181 +70,467 @@
       height: 100%;
       display: flex;
       flex-direction: column;
-      background: var(--panel);
-      border-left: 1px solid var(--border);
-      border-right: 1px solid var(--border);
+      background: var(--room);
     }
+    @media (min-width: 800px) {
+      body { background: #8fa3b6; }
+      .app { box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 10px 40px rgba(0, 0, 0, 0.18); }
+    }
+    @media (min-width: 800px) and (prefers-color-scheme: dark) {
+      body { background: #0f151b; }
+    }
+
+    /* ---------- 상단 바 ---------- */
     header {
-      padding: 14px 16px;
-      border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 16px;
+      background: var(--room);
     }
-    header h1 { font-size: 16px; margin: 0; }
-    header button {
-      background: none;
-      border: 1px solid var(--border);
-      color: var(--muted);
-      border-radius: 6px;
-      padding: 4px 10px;
+    .room-avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 15px;
+      background: var(--avatar);
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+    }
+    .room-avatar svg, .avatar svg { width: 60%; height: 60%; }
+    .room-title { flex: 1; min-width: 0; }
+    .room-title h1 { font-size: 16px; font-weight: 700; margin: 0; }
+    .room-title p { font-size: 12px; color: var(--muted); margin: 2px 0 0; }
+    .icon-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: none;
+      background: transparent;
+      color: var(--text);
+      display: grid;
+      place-items: center;
       cursor: pointer;
     }
+    .icon-btn:hover { background: rgba(0, 0, 0, 0.06); }
+    .icon-btn svg { width: 20px; height: 20px; }
+
+    /* ---------- 대화 영역 ---------- */
     #messages {
       flex: 1;
       overflow-y: auto;
-      padding: 16px;
+      padding: 8px 12px 16px;
       display: flex;
       flex-direction: column;
       gap: 10px;
+      scroll-behavior: smooth;
     }
-    .msg {
-      max-width: 80%;
-      padding: 10px 14px;
+    #messages::-webkit-scrollbar { width: 6px; }
+    #messages::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.15); border-radius: 3px; }
+    .date-pill, .notice {
+      align-self: center;
+      padding: 4px 12px;
+      border-radius: 999px;
+      background: var(--notice);
+      color: #fff;
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+    .notice.error { background: rgba(229, 72, 77, 0.85); }
+
+    .row { display: flex; gap: 8px; flex-shrink: 0; }
+    .row.me { justify-content: flex-end; }
+    .avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 15px;
+      background: var(--avatar);
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+    }
+    .col { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: calc(100% - 48px); }
+    .row.me .col { align-items: flex-end; max-width: 78%; }
+    .name { font-size: 12px; color: var(--muted); margin: 2px 0 0 2px; }
+
+    .line { display: flex; align-items: flex-end; gap: 6px; }
+    .row.me .line { flex-direction: row-reverse; }
+    .time { font-size: 10.5px; color: var(--muted); white-space: nowrap; flex-shrink: 0; padding-bottom: 1px; }
+
+    .bubble {
+      position: relative;
+      padding: 9px 12px;
       border-radius: 14px;
       line-height: 1.5;
       white-space: pre-wrap;
       word-break: break-word;
+      box-shadow: var(--shadow);
+      max-width: 100%;
     }
-    .msg.user { align-self: flex-end; background: var(--user); color: var(--user-text); border-bottom-right-radius: 4px; }
-    .msg.assistant { align-self: flex-start; background: var(--bot); border-bottom-left-radius: 4px; }
-    .msg.error { align-self: center; color: #dc2626; font-size: 13px; background: none; }
-    .msg.typing { color: var(--muted); }
+    .bubble.bot { background: var(--bot); color: var(--text); border-top-left-radius: 4px; }
+    .bubble.me { background: var(--me); color: var(--me-text); border-top-right-radius: 4px; }
+    /* 말풍선 꼬리 */
+    .bubble.bot.tail::before, .bubble.me.tail::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      width: 8px;
+      height: 10px;
+    }
+    .bubble.bot.tail::before { left: -6px; background: var(--bot); clip-path: polygon(100% 0, 0 0, 100% 100%); }
+    .bubble.me.tail::before { right: -6px; background: var(--me); clip-path: polygon(0 0, 100% 0, 0 100%); }
+
+    /* 입력 중 */
+    .typing { display: inline-flex; gap: 4px; padding: 13px 14px; }
+    .typing span {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--soft);
+      animation: blink 1.2s infinite ease-in-out;
+    }
+    .typing span:nth-child(2) { animation-delay: 0.15s; }
+    .typing span:nth-child(3) { animation-delay: 0.3s; }
+    @keyframes blink { 0%, 80%, 100% { opacity: 0.25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+
+    /* 빠른 질문 칩 */
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip {
+      border: none;
+      background: var(--chip);
+      color: var(--chip-text);
+      border-radius: 999px;
+      padding: 7px 12px;
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+    }
+    .chip:hover { filter: brightness(0.97); }
+    .chip:disabled { opacity: 0.5; cursor: default; }
+
+    /* ---------- 표 카드 ---------- */
     .table-card {
-      align-self: flex-start;
-      flex-shrink: 0; /* 메시지 영역(flex)이 카드를 눌러 행이 잘리지 않게 */
-      width: 100%;
-      border: 1px solid var(--border);
-      border-radius: 12px;
+      width: min(560px, 100%);
+      border-radius: 14px;
       overflow: hidden;
-      background: var(--panel);
+      background: var(--card);
+      box-shadow: var(--shadow);
     }
     .table-card h2 {
       font-size: 14px;
+      font-weight: 700;
       margin: 0;
-      padding: 10px 14px;
-      background: var(--bot);
-      border-bottom: 1px solid var(--border);
+      padding: 11px 14px 9px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .table-card h2::before {
+      content: "";
+      width: 4px;
+      height: 14px;
+      border-radius: 2px;
+      background: var(--avatar);
     }
     .table-scroll { overflow-x: auto; }
-    .table-card table { border-collapse: collapse; width: 100%; font-size: 14px; }
+    .table-card table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
     .table-card th, .table-card td {
       padding: 8px 12px;
-      border-bottom: 1px solid var(--border);
+      border-top: 1px solid var(--line);
       text-align: left;
       white-space: nowrap;
     }
-    .table-card th { color: var(--muted); font-size: 12px; font-weight: 600; }
+    .table-card th { color: var(--muted); font-size: 12px; font-weight: 600; background: transparent; }
     .table-card .center { text-align: center; }
-    .table-card tbody tr:last-child td { border-bottom: none; }
     .table-card.clickable tbody tr { cursor: pointer; }
     .table-card.clickable tbody tr:hover { background: var(--hover); }
-    .table-card .route { font-weight: 700; color: var(--user); }
+    .table-card .route { font-weight: 800; color: var(--accent); }
     .table-card .soon { color: var(--soon); font-weight: 700; }
+    .table-card .eta { display: block; font-weight: 700; }
+    .table-card .stops { display: block; font-size: 11.5px; color: var(--muted); }
     .badge {
       display: inline-block;
-      padding: 1px 6px;
+      padding: 1px 7px;
       margin-right: 4px;
       border-radius: 999px;
-      font-size: 12px;
+      font-size: 11.5px;
       background: var(--badge-bg);
     }
     .badge.soon { background: var(--soon-bg); color: var(--soon); }
+    .badge.picked { background: var(--me); color: #191919; font-weight: 700; }
+    .table-card.clickable tbody tr.selected { background: var(--picked-row); }
+    /* 폰 폭: 덜 중요한 칸(정류소 ID, 차량)은 숨기고 여백을 줄여 가로 스크롤 없이 보이게 */
+    @media (max-width: 560px) {
+      .table-card table { font-size: 12.5px; }
+      .table-card th, .table-card td { padding: 7px 8px; }
+      .table-card .col-id, .table-card .col-info { display: none; }
+      .table-card .col-dest, .table-card .col-name {
+        white-space: normal; word-break: keep-all; overflow-wrap: anywhere; min-width: 64px; max-width: 92px;
+      }
+      .table-card .badge.soon { display: block; width: fit-content; margin: 0 0 2px; }
+    }
     .table-note {
-      padding: 8px 14px;
+      padding: 8px 14px 10px;
       font-size: 12px;
       color: var(--muted);
-      border-top: 1px solid var(--border);
+      border-top: 1px solid var(--line);
       white-space: normal;
     }
+
+    /* ---------- 출처 · 피드백 ---------- */
     .sources {
-      flex-shrink: 0;
-      align-self: flex-start;
-      max-width: 80%;
-      margin-top: -4px;
+      background: var(--card);
+      border-radius: 12px;
+      padding: 8px 12px;
       font-size: 12px;
       color: var(--muted);
+      box-shadow: var(--shadow);
+      max-width: 100%;
     }
-    .sources ul { margin: 2px 0 0; padding-left: 18px; }
-    .feedback {
-      flex-shrink: 0;
-      align-self: flex-start;
-      display: flex;
-      gap: 6px;
-      align-items: center;
-      margin-top: -4px;
-      font-size: 12px;
-      color: var(--muted);
-    }
+    .sources strong { color: var(--text); font-weight: 700; }
+    .sources ul { margin: 4px 0 0; padding-left: 16px; }
+    .sources li { margin: 2px 0; word-break: break-all; }
+    .feedback { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
     .feedback button {
-      border: 1px solid var(--border);
-      background: var(--panel);
+      border: none;
+      background: var(--chip);
       border-radius: 999px;
-      padding: 2px 8px;
+      padding: 3px 10px;
       cursor: pointer;
       font-size: 13px;
+      box-shadow: var(--shadow);
     }
-    .feedback button:disabled { opacity: 0.5; cursor: default; }
-    .empty { margin: auto; color: var(--muted); text-align: center; }
+    .feedback button:disabled { opacity: 0.45; cursor: default; }
+
+    /* ---------- 입력 바 ---------- */
     form {
       display: flex;
+      align-items: flex-end;
       gap: 8px;
-      padding: 12px 16px;
-      border-top: 1px solid var(--border);
+      padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+      background: var(--bar);
     }
     textarea {
       flex: 1;
       resize: none;
-      min-height: 44px;
-      max-height: 160px;
-      padding: 11px 12px;
-      border-radius: 10px;
-      border: 1px solid var(--border);
-      background: var(--bg);
+      min-height: 40px;
+      max-height: 140px;
+      padding: 9px 4px 9px 8px;
+      border: none;
+      outline: none;
+      background: transparent;
       color: var(--text);
       font: inherit;
+      line-height: 1.45;
     }
-    form button {
-      padding: 0 18px;
+    textarea::placeholder { color: var(--soft); }
+    .send {
+      width: 40px;
+      height: 40px;
       border: none;
-      border-radius: 10px;
-      background: var(--user);
-      color: #fff;
-      font: inherit;
+      border-radius: 50%;
+      background: var(--me);
+      color: #191919;
+      display: grid;
+      place-items: center;
       cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.15s, opacity 0.15s;
     }
-    form button:disabled { opacity: 0.5; cursor: default; }
+    .send svg { width: 18px; height: 18px; }
+    .send:disabled { background: var(--line); color: var(--soft); cursor: default; }
   </style>
 </head>
 <body>
   <div class="app">
     <header>
-      <h1>경기 버스 도착 챗봇</h1>
-      <button id="reset" type="button">대화 초기화</button>
+      <div class="room-avatar" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#3a2e00" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4" y="3" width="16" height="14" rx="3" /><path d="M4 11h16M8 21v-4M16 21v-4" /><circle cx="8" cy="14" r="0.6" fill="#3a2e00" /><circle cx="16" cy="14" r="0.6" fill="#3a2e00" />
+        </svg>
+      </div>
+      <div class="room-title">
+        <h1>경기 버스 안내봇</h1>
+        <p>실시간 도착 · 요금 · 환승 · 분실물</p>
+      </div>
+      <button class="icon-btn" id="reset" type="button" title="대화 초기화" aria-label="대화 초기화">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" />
+        </svg>
+      </button>
     </header>
-    <div id="messages">
-      <div class="empty" id="empty">정류소 이름을 알려 주세요.<br>예: 미금역, 수원역 환승센터<br>요금·환승 같은 이용 정책도 물어보세요.</div>
-    </div>
+    <div id="messages" aria-live="polite"></div>
     <form id="form">
-      <textarea id="input" rows="1" placeholder="메시지 입력 (Enter 전송, Shift+Enter 줄바꿈)"></textarea>
-      <button id="send" type="submit">전송</button>
+      <textarea id="input" rows="1" placeholder="메시지 입력" aria-label="메시지 입력"></textarea>
+      <button class="send" id="send" type="submit" title="전송" aria-label="전송" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 19V5M5 12l7-7 7 7" />
+        </svg>
+      </button>
     </form>
   </div>
 
   <script>
     const messagesEl = document.getElementById("messages");
-    const emptyEl = document.getElementById("empty");
     const form = document.getElementById("form");
     const input = document.getElementById("input");
     const sendBtn = document.getElementById("send");
 
+    const BOT_NAME = "버스봇";
+    const QUICK = ["미금역 버스 언제 와?", "환승 몇 분 안에 해야 돼?", "버스에 지갑 두고 내렸어", "청소년 버스비 얼마야?"];
+    const AVATAR_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="#3a2e00" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="14" rx="3"/><path d="M4 11h16M8 21v-4M16 21v-4"/></svg>';
+
     let history = []; // [{role, content}]
+    let busy = false;
+    let lastStations = null; // 마지막으로 보여 준 정류소 후보 표 (도착 표 아래에 다시 보여 준다)
     // 대화 ID: LangSmith에서 한 대화의 질문들을 묶어 보는 데 쓴다 (대화 초기화 때 새로 만든다)
     const newSessionId = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
     let sessionId = newSessionId();
 
+    function el(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+
+    function scrollDown() {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function timeLabel(d = new Date()) {
+      const h = d.getHours(), m = String(d.getMinutes()).padStart(2, "0");
+      return (h < 12 ? "오전 " : "오후 ") + ((h % 12) || 12) + ":" + m;
+    }
+
+    function dateLabel(d = new Date()) {
+      const days = ["일", "월", "화", "수", "목", "금", "토"];
+      return `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일 ${days[d.getDay()]}요일`;
+    }
+
+    // ---------- 말풍선 묶음 ----------
+
+    // 봇 응답 한 번(말풍선·표·출처·피드백)을 프로필 옆 한 묶음으로 쌓는다
+    function botGroup() {
+      const row = el("div", "row bot");
+      const avatar = el("div", "avatar");
+      avatar.innerHTML = AVATAR_SVG; // 고정 SVG (사용자 데이터 아님)
+      const col = el("div", "col");
+      col.appendChild(el("div", "name", BOT_NAME));
+      row.append(avatar, col);
+      messagesEl.appendChild(row);
+      scrollDown();
+      return col;
+    }
+
+    function bubbleLine(col, who, text, tail) {
+      const line = el("div", "line");
+      const bubble = el("div", `bubble ${who}` + (tail ? " tail" : ""), text);
+      line.append(bubble, el("span", "time", timeLabel()));
+      col.appendChild(line);
+      scrollDown();
+      return line;
+    }
+
+    function addMine(text) {
+      const row = el("div", "row me");
+      const col = el("div", "col");
+      row.appendChild(col);
+      messagesEl.appendChild(row);
+      bubbleLine(col, "me", text, true);
+    }
+
+    function addNotice(text, error) {
+      messagesEl.appendChild(el("div", "notice" + (error ? " error" : ""), text));
+      scrollDown();
+    }
+
+    function typingIndicator(col) {
+      const line = el("div", "line");
+      const bubble = el("div", "bubble bot tail typing");
+      bubble.append(el("span"), el("span"), el("span"));
+      bubble.setAttribute("aria-label", "입력 중");
+      line.appendChild(bubble);
+      col.appendChild(line);
+      scrollDown();
+      return line;
+    }
+
+    // ---------- 표·출처·피드백 ----------
+
+    // 서버가 준 표(render_table 결과)를 그린다. 데이터는 textContent로만 넣는다.
+    function addTable(col, table, opts = {}) {
+      const card = el("div", "table-card" + (table.kind === "stations" ? " clickable" : ""));
+      card.appendChild(el("h2", "", table.title));
+
+      const wrap = el("div", "table-scroll");
+      const tbl = el("table");
+      const headRow = el("tr");
+      const colClass = (c) => `col-${c.key}` + (c.align === "center" ? " center" : "");
+      table.columns.forEach((c) => headRow.appendChild(el("th", colClass(c), c.label)));
+      tbl.appendChild(el("thead")).appendChild(headRow);
+
+      const body = el("tbody");
+      table.rows.forEach((row) => {
+        const tr = el("tr");
+        table.columns.forEach((c) => {
+          const td = el("td", colClass(c));
+          const value = row[c.key] ?? "";
+          if (table.kind === "arrivals" && c.key === "route") {
+            td.classList.add("route");
+            td.textContent = value;
+          } else if (table.kind === "arrivals" && (c.key === "first" || c.key === "second")) {
+            // '3분 · 2정류장 전' -> 분은 굵게, 정류장 수는 작게 아랫줄
+            const [mins, stops] = String(value).split(" · ");
+            const soon = c.key === "first" && row.minutes !== null && row.minutes <= 2;
+            if (soon) td.appendChild(el("span", "badge soon", "곧 도착"));
+            if (mins) td.appendChild(el("span", "eta" + (soon ? " soon" : ""), mins));
+            if (stops) td.appendChild(el("span", "stops", stops));
+          } else if (table.kind === "arrivals" && c.key === "info") {
+            String(value).split(" · ").filter(Boolean).forEach((t) => td.appendChild(el("span", "badge", t)));
+          } else {
+            td.textContent = value;
+          }
+          tr.appendChild(td);
+        });
+        if (table.kind === "stations") {
+          tr.title = row.no + "번 정류소 고르기";
+          tr.addEventListener("click", () => {
+            if (!busy) send(row.no + "번", row.no);
+          });
+          if (opts.selectedNo === row.no) {
+            // 방금 도착 정보를 본 정류소
+            tr.classList.add("selected");
+            tr.setAttribute("aria-current", "true");
+            const nameCell = tr.querySelector(".col-name");
+            if (nameCell) nameCell.prepend(el("span", "badge picked", "조회함"));
+          }
+        }
+        body.appendChild(tr);
+      });
+      tbl.appendChild(body);
+      wrap.appendChild(tbl);
+      card.appendChild(wrap);
+      if (table.note) card.appendChild(el("div", "table-note", table.note));
+      col.appendChild(card);
+      scrollDown();
+    }
+
+    // 정책 답변의 근거 문서 출처 (서버가 검색 결과에서 꺼낸 것)
+    function addSources(col, sources) {
+      if (!sources.length) return;
+      const box = el("div", "sources");
+      box.appendChild(el("strong", "", "출처"));
+      const list = el("ul");
+      sources.forEach((s) => list.appendChild(el("li", "", s.title + " · " + s.citation)));
+      box.appendChild(list);
+      col.appendChild(box);
+      scrollDown();
+    }
+
     // 답변 아래 👍/👎: 서버가 LangSmith 트레이스에 사용자 피드백으로 기록한다
-    function addFeedback(traceId) {
+    function addFeedback(col, traceId) {
       if (!traceId) return;
       const box = el("div", "feedback");
       const label = el("span", "", "도움이 됐나요?");
@@ -232,7 +539,7 @@
       up.type = down.type = "button";
       up.title = "도움이 됐어요";
       down.title = "별로예요";
-      const send = async (score) => {
+      const rate = async (score) => {
         up.disabled = down.disabled = true;
         try {
           const res = await fetch("/api/feedback", {
@@ -245,92 +552,53 @@
           label.textContent = "기록하지 못했어요";
         }
       };
-      up.addEventListener("click", () => send(1));
-      down.addEventListener("click", () => send(0));
+      up.addEventListener("click", () => rate(1));
+      down.addEventListener("click", () => rate(0));
       box.append(label, up, down);
-      messagesEl.appendChild(box);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+      col.appendChild(box);
+      scrollDown();
     }
 
-    function addMessage(role, text) {
-      emptyEl.style.display = "none";
-      const el = document.createElement("div");
-      el.className = "msg " + role;
-      el.textContent = text;
-      messagesEl.appendChild(el);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
-      return el;
-    }
+    // ---------- 첫 화면 ----------
 
-    function el(tag, className, text) {
-      const node = document.createElement(tag);
-      if (className) node.className = className;
-      if (text !== undefined) node.textContent = text;
-      return node;
-    }
-
-    // 서버가 준 표(render_table 결과)를 그린다. 데이터는 textContent로만 넣는다.
-    function addTable(table) {
-      emptyEl.style.display = "none";
-      const card = el("div", "table-card" + (table.kind === "stations" ? " clickable" : ""));
-      card.appendChild(el("h2", "", table.title));
-
-      const wrap = el("div", "table-scroll");
-      const tbl = el("table");
-      const headRow = el("tr");
-      table.columns.forEach((c) => headRow.appendChild(el("th", c.align === "center" ? "center" : "", c.label)));
-      tbl.appendChild(el("thead")).appendChild(headRow);
-
-      const body = el("tbody");
-      table.rows.forEach((row) => {
-        const tr = el("tr");
-        table.columns.forEach((c) => {
-          const td = el("td", c.align === "center" ? "center" : "");
-          const value = row[c.key] ?? "";
-          if (table.kind === "arrivals" && c.key === "route") {
-            td.className = "route";
-            td.textContent = value;
-          } else if (table.kind === "arrivals" && c.key === "first" && row.minutes !== null && row.minutes <= 2) {
-            td.appendChild(el("span", "badge soon", "곧 도착"));
-            td.appendChild(el("span", "soon", value));
-          } else if (table.kind === "arrivals" && c.key === "info") {
-            String(value).split(" · ").filter(Boolean).forEach((t) => td.appendChild(el("span", "badge", t)));
-          } else {
-            td.textContent = value;
-          }
-          tr.appendChild(td);
-        });
-        if (table.kind === "stations") {
-          tr.title = row.no + "번 정류소 고르기";
-          tr.addEventListener("click", () => {
-            if (!sendBtn.disabled) send(row.no + "번");
-          });
-        }
-        body.appendChild(tr);
+    function welcome() {
+      messagesEl.replaceChildren(el("div", "date-pill", dateLabel()));
+      const col = botGroup();
+      bubbleLine(col, "bot", "안녕하세요! 경기도 버스 안내봇이에요 🚌\n정류소 이름을 말하면 지금 오는 버스를 알려 드리고, 요금·환승·분실물 같은 이용 방법도 안내해 드려요.", true);
+      const chips = el("div", "chips");
+      QUICK.forEach((q) => {
+        const chip = el("button", "chip", q);
+        chip.type = "button";
+        chip.addEventListener("click", () => { if (!busy) send(q); });
+        chips.appendChild(chip);
       });
-      tbl.appendChild(body);
-      wrap.appendChild(tbl);
-      card.appendChild(wrap);
-      if (table.note) card.appendChild(el("div", "table-note", table.note));
-      messagesEl.appendChild(card);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+      col.appendChild(chips);
     }
 
-    // 정책 답변의 근거 문서 출처 (서버가 검색 결과에서 꺼낸 것)
-    function addSources(sources) {
-      if (!sources.length) return;
-      const box = el("div", "sources", "출처");
-      const list = el("ul");
-      sources.forEach((s) => list.appendChild(el("li", "", s.title + " · " + s.citation)));
-      box.appendChild(list);
-      messagesEl.appendChild(box);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+    // ---------- 전송 ----------
+
+    function setBusy(v) {
+      busy = v;
+      sendBtn.disabled = v || !input.value.trim();
+      messagesEl.querySelectorAll(".chip").forEach((c) => (c.disabled = v));
     }
 
-    async function send(text) {
-      addMessage("user", text);
-      sendBtn.disabled = true;
-      const typing = addMessage("assistant typing", "입력 중…");
+    // '4번', '4', 정류소번호('7043')로 고른 경우 후보 표의 몇 번인지 찾는다
+    function pickedNo(text) {
+      if (!lastStations) return null;
+      const m = text.trim().match(/^(\d+)\s*번?$/);
+      if (!m) return null;
+      const byMobile = lastStations.rows.find((r) => String(r.mobile) === m[1]);
+      const byNo = lastStations.rows.find((r) => r.no === Number(m[1]));
+      return (byMobile || byNo || {}).no ?? null;
+    }
+
+    async function send(text, selectedNo) {
+      const picked = selectedNo ?? pickedNo(text);
+      addMine(text);
+      setBusy(true);
+      const col = botGroup();
+      const typing = typingIndicator(col);
       try {
         const res = await fetch("/api/chat", {
           method: "POST",
@@ -340,19 +608,30 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         typing.remove();
-        addMessage("assistant", data.reply);
+        bubbleLine(col, "bot", data.reply, true);
         const tables = data.tables || [];
-        tables.forEach(addTable);
-        addSources(data.sources || []);
-        addFeedback(data.trace_id);
+        tables.forEach((t) => addTable(col, t));
+        const shown = [...tables];
+        const newStations = tables.find((t) => t.kind === "stations");
+        if (newStations) {
+          lastStations = newStations;
+        } else if (lastStations && tables.some((t) => t.kind === "arrivals")) {
+          // 후보 중 하나의 도착 정보를 보여 줬으면, 다른 정류소도 바로 고를 수 있게 후보 표를 다시 보여 준다
+          const again = { ...lastStations, note: "다른 정류소도 눌러서 도착 정보를 볼 수 있어요." };
+          addTable(col, again, { selectedNo: picked });
+          shown.push(again);
+        }
+        addSources(col, data.sources || []);
+        addFeedback(col, data.trace_id);
         // 다음 질문에서 "4번"처럼 고를 수 있게 표의 평문(정류소 ID 포함)도 대화 기록에 남긴다
-        const content = [data.reply, ...tables.map((t) => t.title + "\n" + t.text)].join("\n\n");
+        // 다시 보여 준 후보 목록도 넣는다: 서버는 최근 대화만 보므로 처음 목록이 밀려나도 번호로 고를 수 있게
+        const content = [data.reply, ...shown.map((t) => t.title + "\n" + t.text)].join("\n\n");
         history.push({ role: "user", content: text }, { role: "assistant", content });
       } catch (err) {
-        typing.remove();
-        addMessage("error", "응답을 받지 못했습니다: " + err.message);
+        col.closest(".row").remove();
+        addNotice("응답을 받지 못했어요 (" + err.message + ")", true);
       } finally {
-        sendBtn.disabled = false;
+        setBusy(false);
         input.focus();
       }
     }
@@ -360,7 +639,7 @@
     form.addEventListener("submit", (e) => {
       e.preventDefault();
       const text = input.value.trim();
-      if (!text || sendBtn.disabled) return;
+      if (!text || busy) return;
       input.value = "";
       input.style.height = "";
       send(text);
@@ -376,15 +655,19 @@
     input.addEventListener("input", () => {
       input.style.height = "auto";
       input.style.height = input.scrollHeight + "px";
+      sendBtn.disabled = busy || !input.value.trim();
     });
 
     document.getElementById("reset").addEventListener("click", () => {
+      if (busy) return;
       history = [];
+      lastStations = null;
       sessionId = newSessionId();
-      messagesEl.querySelectorAll(".msg, .table-card, .sources, .feedback").forEach((el) => el.remove());
-      emptyEl.style.display = "";
+      welcome();
       input.focus();
     });
+
+    welcome();
   </script>
 </body>
 </html>
