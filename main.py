@@ -16,10 +16,11 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from arrivals_api import refresh_arrivals
 from chat_graph import build_chat_graph, run_chat
 from observability import send_feedback, tracing_enabled
 
@@ -119,6 +120,15 @@ async def feedback(req: FeedbackRequest) -> dict:
         print(f"피드백 기록 실패: {type(e).__name__}: {e}")
         raise HTTPException(502, "피드백을 기록하지 못했습니다.")
     return {"ok": True}
+
+
+@app.get("/api/arrivals")
+async def arrivals(station_id: str = Query(pattern=r"^\d{9}$")) -> dict:
+    """도착 표 새로고침 (↻ 버튼). 모델을 거치지 않고 MCP 도착 조회만 다시 해 표를 돌려준다."""
+    try:
+        return {"table": await refresh_arrivals(station_id)}
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
 
 
 @app.get("/api/health")

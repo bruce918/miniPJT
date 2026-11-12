@@ -114,6 +114,83 @@
     }
     .icon-btn:hover { background: rgba(0, 0, 0, 0.06); }
     .icon-btn svg { width: 20px; height: 20px; }
+    .icon-btn[hidden] { display: none; }
+
+    /* ---------- 즐겨찾기 ---------- */
+    .fav-open { position: relative; color: #e0a800; }
+    .fav-count {
+      position: absolute;
+      top: 2px;
+      right: 0;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      border-radius: 999px;
+      background: var(--soon);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 16px;
+      text-align: center;
+    }
+    .star-btn {
+      border: none;
+      background: transparent;
+      padding: 0 4px 0 0;
+      margin: 0;
+      font-size: 16px;
+      line-height: 1;
+      color: var(--soft);
+      cursor: pointer;
+      vertical-align: -1px;
+    }
+    .star-btn.on { color: #f5b800; }
+    .star-btn:hover { transform: scale(1.15); }
+    .sheet-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      background: rgba(0, 0, 0, 0.38);
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+    }
+    .sheet-backdrop[hidden] { display: none; }
+    .sheet {
+      width: min(760px, 100%);
+      max-height: 72vh;
+      display: flex;
+      flex-direction: column;
+      background: var(--bar);
+      color: var(--text);
+      border-radius: 18px 18px 0 0;
+      padding: 6px 0 calc(10px + env(safe-area-inset-bottom));
+      box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.2);
+      animation: sheet-up 0.18s ease-out;
+    }
+    @keyframes sheet-up { from { transform: translateY(24px); } to { transform: none; } }
+    .sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px 0 18px; }
+    .sheet-head h2 { font-size: 16px; margin: 0; }
+    .sheet-hint { margin: 2px 18px 8px; font-size: 12px; color: var(--muted); }
+    .fav-list { list-style: none; margin: 0; padding: 0 10px; overflow-y: auto; }
+    .fav-list li { display: flex; align-items: center; gap: 4px; border-top: 1px solid var(--line); }
+    .fav-list li:first-child { border-top: none; }
+    .fav-item {
+      flex: 1;
+      min-width: 0;
+      text-align: left;
+      border: none;
+      background: transparent;
+      color: var(--text);
+      font: inherit;
+      padding: 11px 8px;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+    .fav-item:hover { background: var(--hover); }
+    .fav-item strong { display: block; font-size: 15px; }
+    .fav-item span { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); }
+    .fav-empty { padding: 18px 8px 22px; color: var(--muted); font-size: 13px; text-align: center; }
 
     /* ---------- 대화 영역 ---------- */
     #messages {
@@ -248,6 +325,26 @@
       align-items: center;
       gap: 6px;
     }
+    .table-head { display: flex; align-items: center; gap: 6px; padding-right: 8px; }
+    .table-head h2 { flex: 1; min-width: 0; }
+    .table-stamp { font-size: 11px; color: var(--muted); white-space: nowrap; }
+    .refresh-btn {
+      width: 30px;
+      height: 30px;
+      flex-shrink: 0;
+      border: none;
+      border-radius: 50%;
+      background: var(--badge-bg);
+      color: var(--accent);
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+    }
+    .refresh-btn svg { width: 16px; height: 16px; }
+    .refresh-btn:hover { filter: brightness(0.96); }
+    .refresh-btn:disabled { cursor: default; opacity: 0.7; }
+    .refresh-btn.spinning svg { animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .table-card h2::before {
       content: "";
       width: 4px;
@@ -396,6 +493,13 @@
         <h1>경기 버스 안내봇</h1>
         <p>실시간 도착 · 요금 · 환승 · 분실물</p>
       </div>
+      <button class="icon-btn fav-open" id="fav-open" type="button" title="즐겨찾기 모아보기"
+              aria-label="즐겨찾기 모아보기" aria-haspopup="dialog" hidden>
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 2.8l2.8 5.7 6.3.9-4.6 4.4 1.1 6.2L12 17.1 6.4 20l1.1-6.2L2.9 9.4l6.3-.9z" />
+        </svg>
+        <span class="fav-count" id="fav-count">0</span>
+      </button>
       <button class="icon-btn" id="reset" type="button" title="대화 초기화" aria-label="대화 초기화">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" />
@@ -411,6 +515,20 @@
         </svg>
       </button>
     </form>
+  </div>
+
+  <!-- 즐겨찾기 모아보기 레이어 (아래에서 올라오는 시트) -->
+  <div class="sheet-backdrop" id="fav-layer" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="fav-title">
+      <div class="sheet-head">
+        <h2 id="fav-title">즐겨찾는 정류소</h2>
+        <button class="icon-btn" id="fav-close" type="button" title="닫기" aria-label="닫기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+      </div>
+      <p class="sheet-hint">정류소를 누르면 바로 도착 정보를 보여 드려요.</p>
+      <ul class="fav-list" id="fav-list"></ul>
+    </div>
   </div>
 
   <script>
@@ -434,7 +552,8 @@
       ["광역버스", "광역버스 서서 타도 돼?"],
       ["공공버스", "경기도 공공버스가 뭐야?"],
     ];
-    const AVATAR_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="#3a2e00" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="14" rx="3"/><path d="M4 11h16M8 21v-4M16 21v-4"/></svg>';
+    const REFRESH_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/></svg>';
+    const AVATAR_SVG ='<svg viewBox="0 0 24 24" fill="none" stroke="#3a2e00" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="14" rx="3"/><path d="M4 11h16M8 21v-4M16 21v-4"/></svg>';
 
     let history = []; // [{role, content}]
     let busy = false;
@@ -516,8 +635,44 @@
 
     // 서버가 준 표(render_table 결과)를 그린다. 데이터는 textContent로만 넣는다.
     function addTable(col, table, opts = {}) {
+      col.appendChild(buildTableCard(table, opts));
+      scrollDown();
+    }
+
+    // 도착 표 제목 줄 오른쪽: "오전 11:59 기준" + ↻ 버튼 (모델 없이 도착 정보만 다시 받아 표를 그 자리에서 바꾼다)
+    function tableHead(table, opts, card) {
+      const head = el("div", "table-head");
+      head.appendChild(el("h2", "", table.title));
+      if (table.kind !== "arrivals" || !/^\d{9}$/.test(table.station_id || "")) return head;
+      const stamp = el("span", "table-stamp", timeLabel() + " 기준");
+      const btn = el("button", "refresh-btn");
+      btn.type = "button";
+      btn.title = "도착 정보 새로고침";
+      btn.setAttribute("aria-label", btn.title);
+      btn.innerHTML = REFRESH_SVG; // 고정 SVG (사용자 데이터 아님)
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.classList.add("spinning");
+        stamp.textContent = "갱신 중…";
+        try {
+          const res = await fetch("/api/arrivals?station_id=" + encodeURIComponent(table.station_id));
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.table) throw new Error(data.detail || "HTTP " + res.status);
+          card.replaceWith(buildTableCard(data.table, opts));
+        } catch (err) {
+          stamp.textContent = "갱신 실패";
+          stamp.title = String(err.message || err);
+          btn.disabled = false;
+          btn.classList.remove("spinning");
+        }
+      });
+      head.append(stamp, btn);
+      return head;
+    }
+
+    function buildTableCard(table, opts = {}) {
       const card = el("div", "table-card" + (table.kind === "stations" ? " clickable" : ""));
-      card.appendChild(el("h2", "", table.title));
+      card.appendChild(tableHead(table, opts, card));
 
       const wrap = el("div", "table-scroll");
       const tbl = el("table");
@@ -566,6 +721,19 @@
             const nameCell = tr.querySelector(".col-name");
             if (nameCell) nameCell.prepend(el("span", "badge picked", "조회함"));
           }
+          // 정류소 이름 앞 별 버튼: 즐겨찾기 추가/해제 (행 선택과 겹치지 않게 클릭 전파를 막는다)
+          const nameCell = tr.querySelector(".col-name");
+          if (nameCell && row.id) {
+            const star = el("button", "star-btn");
+            star.type = "button";
+            star.dataset.id = String(row.id);
+            setStar(star, isFav(row.id));
+            star.addEventListener("click", (e) => {
+              e.stopPropagation();
+              toggleFav(row);
+            });
+            nameCell.prepend(star);
+          }
         }
         body.appendChild(tr);
       });
@@ -573,8 +741,7 @@
       wrap.appendChild(tbl);
       card.appendChild(wrap);
       if (table.note) card.appendChild(el("div", "table-note", table.note));
-      col.appendChild(card);
-      scrollDown();
+      return card;
     }
 
     // 정책 답변의 근거 문서 출처 (서버가 검색 결과에서 꺼낸 것)
@@ -683,8 +850,111 @@
       return (byMobile || byNo || {}).no ?? null;
     }
 
-    async function send(text, selectedNo) {
-      const picked = selectedNo ?? pickedNo(text);
+    // ---------- 즐겨찾기 (이 브라우저의 localStorage에 저장) ----------
+
+    const FAV_KEY = "ggbus.favorites.v1";
+    const favOpenBtn = document.getElementById("fav-open");
+    const favCountEl = document.getElementById("fav-count");
+    const favLayer = document.getElementById("fav-layer");
+    const favList = document.getElementById("fav-list");
+
+    function loadFavs() {
+      try {
+        const v = JSON.parse(localStorage.getItem(FAV_KEY));
+        return Array.isArray(v) ? v.filter((f) => f && f.id && f.name) : [];
+      } catch {
+        return [];
+      }
+    }
+    let favorites = loadFavs();
+
+    function saveFavs() {
+      try {
+        localStorage.setItem(FAV_KEY, JSON.stringify(favorites));
+      } catch {
+        // 저장할 수 없는 환경(사생활 보호 모드 등)이면 이번 창에서만 유지된다
+      }
+      refreshFavUI();
+    }
+
+    const isFav = (id) => favorites.some((f) => f.id === String(id));
+
+    function toggleFav(row) {
+      const id = String(row.id);
+      if (isFav(id)) {
+        favorites = favorites.filter((f) => f.id !== id);
+      } else {
+        favorites.push({ id, name: row.name, mobile: String(row.mobile || ""), city: row.city || "", next: row.next || "" });
+      }
+      saveFavs();
+    }
+
+    function setStar(btn, on) {
+      btn.textContent = on ? "★" : "☆";
+      btn.classList.toggle("on", on);
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+      btn.title = on ? "즐겨찾기 해제" : "즐겨찾기 추가";
+      btn.setAttribute("aria-label", btn.title);
+    }
+
+    // 별 표시·상단 버튼·열려 있는 레이어를 즐겨찾기 상태에 맞춘다
+    function refreshFavUI() {
+      favOpenBtn.hidden = favorites.length === 0;
+      favCountEl.textContent = favorites.length;
+      document.querySelectorAll(".star-btn[data-id]").forEach((b) => setStar(b, isFav(b.dataset.id)));
+      if (!favLayer.hidden) renderFavList();
+    }
+
+    function renderFavList() {
+      favList.replaceChildren();
+      if (!favorites.length) {
+        favList.appendChild(el("li", "fav-empty", "즐겨찾는 정류소가 없어요. 후보 표에서 ☆를 눌러 추가해 보세요."));
+        return;
+      }
+      favorites.forEach((f) => {
+        const li = el("li");
+        const item = el("button", "fav-item");
+        item.type = "button";
+        item.appendChild(el("strong", "", f.name));
+        const sub = [f.next ? "→ " + f.next : "", f.city, f.mobile ? "정류소번호 " + f.mobile : ""].filter(Boolean).join(" · ");
+        item.appendChild(el("span", "", sub));
+        item.addEventListener("click", () => {
+          if (busy) return;
+          closeFavs();
+          // 화면에는 이름으로 보이고, 서버에는 정류소 ID로 정확히 조회한다
+          send(f.name + (f.mobile ? ` (${f.mobile})` : ""), null,
+               { query: `정류소 ID ${f.id} 버스 언제 와?`, fromFavorite: true });
+        });
+        const remove = el("button", "star-btn on");
+        remove.type = "button";
+        setStar(remove, true);
+        remove.addEventListener("click", () => toggleFav(f));
+        li.append(item, remove);
+        favList.appendChild(li);
+      });
+    }
+
+    function openFavs() {
+      renderFavList();
+      favLayer.hidden = false;
+      document.getElementById("fav-close").focus();
+    }
+
+    function closeFavs() {
+      favLayer.hidden = true;
+      favOpenBtn.focus();
+    }
+
+    favOpenBtn.addEventListener("click", openFavs);
+    document.getElementById("fav-close").addEventListener("click", closeFavs);
+    favLayer.addEventListener("click", (e) => { if (e.target === favLayer) closeFavs(); });  // 바깥 어두운 곳 누르면 닫기
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !favLayer.hidden) closeFavs(); });
+
+    // opts.query: 서버에 보낼 문장이 화면에 보일 문장과 다를 때 (즐겨찾기 조회)
+    // opts.fromFavorite: 다른 정류소 조회라 이전 후보 표를 다시 붙이지 않는다
+    async function send(text, selectedNo, opts = {}) {
+      const query = opts.query || text;
+      const picked = selectedNo ?? (opts.query ? null : pickedNo(text));
       addMine(text);
       setBusy(true);
       const col = botGroup();
@@ -693,19 +963,22 @@
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text, history, session_id: sessionId }),
+          body: JSON.stringify({ message: query, history, session_id: sessionId }),
         });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         typing.remove();
-        bubbleLine(col, "bot", data.reply, true);
         const tables = data.tables || [];
+        // 도착 표가 왔으면(후보 선택·정류소 ID 직접 조회 등) 모델의 요약 말풍선 없이 표부터 보여 준다.
+        // (도착 표가 없으면 — 지금 오는 버스 없음·오류·정책 답변 등 — 말풍선이 유일한 답이라 그대로 보여 준다)
+        const hasArrivalTable = tables.some((t) => t.kind === "arrivals");
+        if (!hasArrivalTable) bubbleLine(col, "bot", data.reply, true);
         tables.forEach((t) => addTable(col, t));
         const shown = [...tables];
         const newStations = tables.find((t) => t.kind === "stations");
         if (newStations) {
           lastStations = newStations;
-        } else if (lastStations && tables.some((t) => t.kind === "arrivals")) {
+        } else if (lastStations && !opts.fromFavorite && tables.some((t) => t.kind === "arrivals")) {
           // 후보 중 하나의 도착 정보를 보여 줬으면, 다른 정류소도 바로 고를 수 있게 후보 표를 다시 보여 준다
           const again = { ...lastStations, note: "다른 정류소도 눌러서 도착 정보를 볼 수 있어요." };
           addTable(col, again, { selectedNo: picked });
@@ -722,7 +995,7 @@
         // 다음 질문에서 "4번"처럼 고를 수 있게 표의 평문(정류소 ID 포함)도 대화 기록에 남긴다
         // 다시 보여 준 후보 목록도 넣는다: 서버는 최근 대화만 보므로 처음 목록이 밀려나도 번호로 고를 수 있게
         const content = [data.reply, ...shown.map((t) => t.title + "\n" + t.text)].join("\n\n");
-        history.push({ role: "user", content: text }, { role: "assistant", content });
+        history.push({ role: "user", content: query }, { role: "assistant", content });
       } catch (err) {
         col.closest(".row").remove();
         addNotice("응답을 받지 못했어요 (" + err.message + ")", true);
@@ -764,6 +1037,7 @@
     });
 
     welcome();
+    refreshFavUI();
   </script>
 </body>
 </html>

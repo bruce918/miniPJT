@@ -322,6 +322,11 @@ async def run_chat(graph, message: str, history: list[tuple[str, str]],
         tables = fallback_tables(turn)
         if tables:
             print(f"[안전망] 모델이 render_table을 호출하지 않아 서버가 표를 만들었습니다: {tables[0]['kind']}")
+    # 후보 표를 보여 줄 때는 말풍선에 목록을 다시 늘어놓지 않도록 짧은 안내로 고정한다
+    # (모델이 프롬프트를 어기고 후보 전체를 나열하는 경우가 있어서)
+    stations = next((t for t in tables if t.get("kind") == "stations"), None)
+    if stations and not any(t.get("kind") == "arrivals" for t in tables):
+        reply = f"{len(stations['rows'])}곳이 있어요. 표에서 골라 주세요."
     # 정책 답변의 출처: 모델이 쓰게 하지 않고 retrieve_docs 결과에서 꺼낸다 (지어낸 출처 방지)
     sources, seen = [], set()
     for m in turn:

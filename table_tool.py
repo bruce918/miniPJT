@@ -12,9 +12,10 @@
 
 import json
 import re
+from pathlib import Path
 from typing import Annotated, Literal
 
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
@@ -51,6 +52,74 @@ def _search_total(messages) -> int | None:
             found = re.match(r"\(총 (\d+)건", _text(m.content).strip())
             return int(found.group(1)) if found else None
     return None
+
+
+BASE_DIR = Path(__file__).parent
+STATIONS_PATH = BASE_DIR / "gg_stations.json"
+NEXT_STOP_CACHE = BASE_DIR / ".cache" / "next_stops.json"  # MCP 서버(next_stop.py)가 쓰는 다음 정류장 캐시
+_station_by_id: dict | None = None
+
+
+def _station(station_id) -> dict | None:
+    """정류소 ID -> {name, mobile, city} (gg_stations.json, 처음 쓸 때 한 번만 읽음)."""
+    global _station_by_id
+    if _station_by_id is None:
+        try:
+            with open(STATIONS_PATH, encoding="utf-8") as f:
+                _station_by_id = {str(s["id"]): s for s in json.load(f)}
+        except (OSError, json.JSONDecodeError):
+            _station_by_id = {}
+    return _station_by_id.get(str(station_id))
+
+
+def _next_stop(station_id) -> str:
+    try:
+        with open(NEXT_STOP_CACHE, encoding="utf-8") as f:
+            return json.load(f).get(str(station_id), {}).get("next", "")
+    except (OSError, json.JSONDecodeError):
+        return ""
+
+
+def _arrival_station_id(messages) -> str | None:
+    """이번 턴 마지막 도착 조회(get_bus_arrival_list)에 넘긴 정류소 ID."""
+    calls = {tc["id"]: tc["args"] for m in messages if isinstance(m, AIMessage) for tc in m.tool_calls}
+    for m in reversed(messages):
+        if isinstance(m, ToolMessage) and m.name == SOURCE_TOOL["arrivals"]:
+            sid = calls.get(m.tool_call_id, {}).get("station_id")
+            return str(sid) if sid else None
+    return None
+
+
+def station_title(station_id, fallback: str) -> tuple[str, str]:
+    """정류소 ID -> ("○○ 도착 정보", 다음 정류장). 모르는 ID면 (fallback, "")."""
+    info = _station(station_id) if station_id else None
+    if not info:
+        return fallback, ""
+    return f"{info['name']} 도착 정보", _next_stop(station_id)
+
+
+def arrival_title(messages, fallback: str) -> tuple[str, str, str | None]:
+    """도착 표 제목은 모델이 아니라 실제로 조회한 정류소 ID의 이름으로 정한다 (ID·번호 대신 이름).
+
+    이름이 같은 정류소를 구분하도록 다음 정류장을 알면 함께 돌려준다 (표 아래 안내에 쓴다).
+    반환: (제목, 다음 정류장, 정류소 ID) — 정류소 ID는 화면의 새로고침 버튼이 쓴다.
+    """
+    sid = _arrival_station_id(messages)
+    title, next_stop = station_title(sid, fallback)
+    return title, next_stop, sid
+
+
+def arrivals_table_from_text(station_id: str, raw: str) -> dict | None:
+    """get_bus_arrival_list 결과 문자열로 도착 표를 만든다 (새로고침 API용). 오류 문장이면 None."""
+    start = raw.find("{")
+    if start < 0:
+        return None
+    try:
+        data = json.loads(raw[start:])
+    except json.JSONDecodeError:
+        return None
+    title, next_stop = station_title(station_id, "도착 정보")
+    return {**arrivals_table(title, data, next_stop), "station_id": str(station_id)}
 
 
 def _num(v):
@@ -100,7 +169,7 @@ def _eta(minutes, stops) -> str:
     return s + (f" · {stops}정류장 전" if stops is not None else "")
 
 
-def arrivals_table(title: str, data: dict) -> dict:
+def arrivals_table(title: str, data: dict, next_stop: str = "") -> dict:
     live = sorted(data.get("도착정보_있는_노선", []), key=lambda r: _num(r.get("predictTime1")) or 999)
     rows = []
     for r in live:
@@ -119,7 +188,11 @@ def arrivals_table(title: str, data: dict) -> dict:
             "minutes": first,  # UI가 곧 도착(2분 이하) 강조에 쓴다
         })
     idle = data.get("도착정보_없는_노선", [])
-    note = f"도착 정보 없는 노선: {', '.join(map(str, idle))}" if idle else ""
+    note = " · ".join(x for x in (
+        "지금 도착 예정인 버스가 없어요" if not rows else "",
+        f"다음 정류장 → {next_stop} 방향" if next_stop else "",
+        f"도착 정보 없는 노선: {', '.join(map(str, idle))}" if idle else "",
+    ) if x)
     lines = [f"{r['route']}({r['dest']}) {r['first']}" + (f", 다음 {r['second']}" if r["second"] else "") for r in rows]
     return {
         "kind": "arrivals",
@@ -145,7 +218,8 @@ def fallback_tables(messages) -> list[dict]:
     """
     arrivals = _latest_result(messages, SOURCE_TOOL["arrivals"])
     if isinstance(arrivals, dict) and arrivals.get("도착정보_있는_노선"):
-        return [{**arrivals_table("도착 정보", arrivals), "auto": True}]
+        title, next_stop, sid = arrival_title(messages, "도착 정보")
+        return [{**arrivals_table(title, arrivals, next_stop), "station_id": sid, "auto": True}]
     stations = _latest_result(messages, SOURCE_TOOL["stations"])
     if isinstance(stations, list) and len(stations) >= 2:
         return [{**stations_table("정류소 후보", stations), "auto": True}]
@@ -171,7 +245,9 @@ def render_table(
         table = stations_table(title, data, _search_total(state["messages"]))
         return (f"정류소 {len(table['rows'])}곳을 표로 화면에 보여 줬습니다. 답변에서 목록을 다시 나열하지 마세요. "
                 f"답변의 개수는 표에 보이는 {len(table['rows'])}곳으로 말하세요."), table
-    table = arrivals_table(title, data)
+    # 제목은 모델이 준 값(ID나 다른 이름일 수 있음) 대신 실제로 조회한 정류소의 이름으로 정한다
+    title, next_stop, sid = arrival_title(state["messages"], title)
+    table = {**arrivals_table(title, data, next_stop), "station_id": sid}
     # 요약할 때 모델이 순서를 직접 비교하지 않도록, 이미 정렬된 앞쪽 노선을 그대로 알려 준다
     first = [f"{r['route']}번 {r['first']}" for r in table["rows"][:3]]
     order = ", ".join(first) if first else "없음"
