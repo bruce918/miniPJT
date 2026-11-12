@@ -41,6 +41,7 @@ from pydantic import BaseModel, Field
 
 from bus_agent import BUS_MODEL_ID, get_text, make_llm
 from chat_graph import build_chat_graph, run_chat
+from observability import eval_tracing
 
 load_dotenv()
 
@@ -159,7 +160,7 @@ def build_eval_chains(llm) -> dict:
     for name, prompt in PROMPTS.items():
         if "guide" in prompt.input_variables:
             prompt = prompt.partial(guide=CONTEXT_GUIDE)
-        chains[name] = prompt | llm.with_structured_output(SCHEMAS[name])
+        chains[name] = (prompt | llm.with_structured_output(SCHEMAS[name])).with_config(run_name=f"eval_{name}")
     return chains
 
 
@@ -280,7 +281,7 @@ def build_transcript(sample: dict, turn) -> str:
 
 async def evaluate_sample(graph, ev: Evaluator, sample: dict) -> dict:
     history = [(m["role"], m["content"]) for m in sample.get("history", [])]
-    turn = await run_chat(graph, sample["question"], history)
+    turn = await run_chat(graph, sample["question"], history, source="eval", session_id=f"eval-{sample['id']}")
 
     predicted = [
         {"name": tc["name"], "args": tc["args"]}
@@ -445,4 +446,7 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    # LangSmith에는 <프로젝트>-eval 프로젝트에 기록해 실제 사용 기록과 섞지 않는다
+    with eval_tracing("quality") as project:
+        print(f"[트레이스] LangSmith 프로젝트: {project}")
+        sys.exit(asyncio.run(main()))

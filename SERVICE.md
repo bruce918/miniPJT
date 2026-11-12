@@ -184,3 +184,32 @@ verify는 도착 도구 없이 도착 시간을 말하거나 데이터 도구 �
 - 리랭킹은 정답을 맨 위로 끌어올려 Hit@1을 0.75 → 0.92로 가장 크게 올렸다. 대신 질문마다 LLM 호출이 2번(확장·리랭킹) 늘어난다.
 - **한계:** 1회 실행 결과이고 쿼리 확장·리랭킹은 LLM이라 실행마다 조금 달라질 수 있다. 라벨 세트를 문서를 쓴 쪽에서 만들었으므로, 실제 사용자 질문을 모아 세트를 넓혀야 한다.
   정책 질문의 답변 품질(Faithfulness 등)은 아직 `eval_set.json`에 넣지 않았다.
+
+## 8. Observability (LangSmith 트레이스)
+`.env`의 `LANGSMITH_TRACING=true`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`로 모든 실행을 LangSmith에 기록한다. 트레이스 설정은 `observability.py`에 모았다.
+
+**트레이스 구조 (질문 1건 = 루트 실행 1개):**
+```
+chat_turn                       루트. 메타데이터 session_id·source·intent·app, 태그 source:web / intent:policy_qa
+└ chat_graph
+  ├ classify                    LCEL (구조화 출력)
+  ├ route_by_intent             조건부 엣지
+  ├ bus_agent | policy_agent    ReAct 에이전트 (LLM 호출, 도구 호출)
+  │   └ retrieve_docs
+  │       └ rag_search          retriever: 찾은 문서·RRF·리랭킹 점수
+  │           ├ query_expansion · bm25 x3 · dense x3 · rrf_fusion · rerank
+  └ verify | verify_policy → retry_or_end_<노드>
+```
+
+| 패턴 | 구현 |
+|---|---|
+| 루트 실행 구조화 | `run_chat`에 `@traceable(name="chat_turn")`. 입력은 질문·대화 길이만, 출력은 답변·intent·표 종류·출처로 요약해 기록 |
+| 대화 단위 묶음 | 브라우저가 대화마다 `session_id`를 만들어 보내고(대화 초기화 시 새로 발급) 메타데이터에 넣어 LangSmith Threads에서 대화 흐름으로 본다 |
+| 단계 이름 | LCEL 체인 `run_name`(classify, query_expansion, rerank, eval_*), 에이전트 `name`(bus_agent, policy_agent), 그래프 `chat_graph`, 라우팅 함수 이름 |
+| LangChain 밖 코드 추적 | RAG의 BM25·임베딩·RRF 함수에 `@traceable` (청크 ID·소제목·점수 기록) |
+| 환경 분리 | 웹은 `source:web`, `run_tests.py`는 `source:test` 태그. `evaluate.py`·`eval_retrieval.py`는 `<프로젝트>-eval` 프로젝트에 기록 (`EVAL_LANGSMITH_PROJECT`로 변경) |
+| 응답 ↔ 트레이스 연결 | `/api/chat` 응답의 `trace_id`(루트 실행 ID)로 문제 답변의 트레이스를 바로 찾는다 |
+| 사용자 피드백 | 답변 아래 👍/👎 → `/api/feedback` → LangSmith 피드백 `user_score`(1/0)로 해당 트레이스에 기록 |
+
+- **개인정보:** 사용자 질문과 답변이 LangSmith(외부 서비스)로 전송된다. API 키 같은 비밀값은 트레이스에 들어가지 않는다. 질문 내용을 보내지 않으려면 `.env`에 `LANGSMITH_HIDE_INPUTS=true`(답변은 `LANGSMITH_HIDE_OUTPUTS=true`), 트레이싱 자체를 끄려면 `LANGSMITH_TRACING=false`.
+- **확인 (2026-11-12):** 같은 대화 ID로 보낸 정책 질문·도착 질문이 각각 `chat_turn` 루트로 기록되고 메타데이터·태그·실행 트리·👍 피드백이 붙는 것을 LangSmith API로 확인했다. 회귀 테스트 20건은 `source:test`로, 평가 실행은 `-eval` 프로젝트로 분리되어 기록됐다.

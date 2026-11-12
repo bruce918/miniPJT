@@ -13,12 +13,15 @@
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
+from uuid import UUID
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from chat_graph import build_chat_graph, run_chat
+from observability import send_feedback, tracing_enabled
 
 BASE_DIR = Path(__file__).parent
 
@@ -31,6 +34,8 @@ class Message(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     history: list[Message] = []
+    session_id: str | None = Field(default=None, max_length=64)  # 대화 ID (LangSmith Threads로 묶임)
+    client: Literal["web", "test"] = "web"                       # 트레이스 구분용 (run_tests.py는 test)
 
 
 class ChatResponse(BaseModel):
@@ -38,6 +43,13 @@ class ChatResponse(BaseModel):
     intent: str | None = None  # classify 결과 (디버깅·테스트용)
     tables: list[dict] = []    # render_table 도구가 만든 표 (UI가 그린다. 각 표의 text는 평문 버전)
     sources: list[dict] = []   # 정책 답변의 근거 문서 출처 (retrieve_docs 결과)
+    trace_id: str | None = None  # LangSmith 루트 실행 ID (피드백·디버깅용)
+
+
+class FeedbackRequest(BaseModel):
+    trace_id: UUID
+    score: Literal[0, 1]  # 1=좋아요, 0=별로
+    comment: str | None = Field(default=None, max_length=500)
 
 
 _graph = None
@@ -66,18 +78,20 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="miniPJT 버스 챗봇", lifespan=lifespan)
 
 
-async def generate_reply(message: str, history: list[Message]) -> ChatResponse:
+async def generate_reply(message: str, history: list[Message], source: str, session_id: str | None) -> ChatResponse:
     try:
         graph = await get_graph()
     except RuntimeError as e:
         return ChatResponse(reply=str(e))
 
     try:
-        turn = await run_chat(graph, message, [(m.role, m.content) for m in history])
+        turn = await run_chat(graph, message, [(m.role, m.content) for m in history],
+                              source=source, session_id=session_id)
     except Exception as e:
         print(f"그래프 오류: {type(e).__name__}: {e}")
         return ChatResponse(reply=f"조회 중 오류가 났습니다 ({type(e).__name__}). 잠시 후 다시 시도해 주세요.")
-    return ChatResponse(reply=turn.reply, intent=turn.intent, tables=turn.tables, sources=turn.sources)
+    return ChatResponse(reply=turn.reply, intent=turn.intent, tables=turn.tables, sources=turn.sources,
+                        trace_id=turn.trace_id)
 
 
 @app.get("/")
@@ -91,9 +105,22 @@ async def chat(req: ChatRequest) -> ChatResponse:
     message = req.message.strip()
     if not message:
         return ChatResponse(reply="정류소 이름을 알려 주세요 (예: 미금역).")
-    return await generate_reply(message[:500], req.history)
+    return await generate_reply(message[:500], req.history, req.client, req.session_id)
+
+
+@app.post("/api/feedback")
+async def feedback(req: FeedbackRequest) -> dict:
+    """답변에 대한 사용자 피드백을 LangSmith의 해당 트레이스(chat_turn)에 붙인다."""
+    if not tracing_enabled():
+        raise HTTPException(503, "트레이싱이 꺼져 있어 피드백을 기록할 수 없습니다.")
+    try:
+        await asyncio.to_thread(send_feedback, str(req.trace_id), req.score, req.comment)
+    except Exception as e:
+        print(f"피드백 기록 실패: {type(e).__name__}: {e}")
+        raise HTTPException(502, "피드백을 기록하지 못했습니다.")
+    return {"ok": True}
 
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok", "chat_graph": _graph is not None}
+    return {"status": "ok", "chat_graph": _graph is not None, "tracing": tracing_enabled()}

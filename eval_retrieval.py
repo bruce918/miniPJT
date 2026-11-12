@@ -18,6 +18,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from observability import eval_tracing
 from rag import Retriever, RetrievalConfig
 
 BASE_DIR = Path(__file__).parent
@@ -85,4 +86,6 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    with eval_tracing("retrieval") as project:
+        print(f"[트레이스] LangSmith 프로젝트: {project}")
+        sys.exit(asyncio.run(main()))

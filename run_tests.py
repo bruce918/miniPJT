@@ -67,7 +67,8 @@ def main() -> int:
             started = time.perf_counter()
             try:
                 res = http.post(f"{CHATBOT_URL}/api/chat",
-                                json={"message": c["message"], "history": c.get("history", [])})
+                                json={"message": c["message"], "history": c.get("history", []),
+                                      "client": "test", "session_id": f"test-{c['id']}"})
                 res.raise_for_status()
                 body = res.json()
                 tables = body.get("tables", [])

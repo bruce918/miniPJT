@@ -19,9 +19,11 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import create_react_agent
+from langsmith import traceable
 from pydantic import BaseModel, Field
 
 from bus_agent import SYSTEM_PROMPT, build_agent, get_text, make_llm
+from observability import APP_NAME, annotate_current_run
 from rag import get_retriever, retrieve_docs
 from table_tool import fallback_tables, render_table
 
@@ -171,14 +173,15 @@ def build_classify_chain():
         SystemMessage(CLASSIFY_PROMPT),
         MessagesPlaceholder("messages"),
     ])
-    return prompt | make_llm(max_tokens=100).with_structured_output(Classification)
+    chain = prompt | make_llm(max_tokens=100).with_structured_output(Classification)
+    return chain.with_config(run_name="classify")
 
 
 async def build_chat_graph():
     """MCP 서버에 접속해 버스 에이전트를 만들고, 분류 -> 라우팅 그래프를 컴파일한다."""
-    bus_agent, _ = await build_agent(BUS_PROMPT, extra_tools=[render_table])
+    bus_agent, _ = await build_agent(BUS_PROMPT, extra_tools=[render_table], name="bus_agent")
     await get_retriever()  # 문서 색인(임베딩 캐시)을 미리 만들어 첫 질문이 느리지 않게 한다
-    policy_agent = create_react_agent(make_llm(), [retrieve_docs], prompt=POLICY_PROMPT)
+    policy_agent = create_react_agent(make_llm(), [retrieve_docs], prompt=POLICY_PROMPT, name="policy_agent")
     classify_chain = build_classify_chain()
 
     async def classify(state: ChatState) -> dict:
@@ -205,7 +208,11 @@ async def build_chat_graph():
     def back_or_end(node: str):
         def route(state: ChatState) -> str:
             return node if isinstance(state["messages"][-1], HumanMessage) else END
+        route.__name__ = f"retry_or_end_{node}"  # 트레이스에 보이는 이름
         return route
+
+    def route_by_intent(state: ChatState) -> str:
+        return state["intent"]
 
     async def verify(state: ChatState) -> dict:
         violation = find_violation(state["messages"])
@@ -235,13 +242,13 @@ async def build_chat_graph():
     graph.add_node("verify_policy", verify_policy)
     graph.add_node("out_of_scope", out_of_scope)
     graph.add_edge(START, "classify")
-    graph.add_conditional_edges("classify", lambda s: s["intent"], ROUTES)
+    graph.add_conditional_edges("classify", route_by_intent, ROUTES)
     graph.add_edge("bus_arrival", "verify")
     graph.add_conditional_edges("verify", back_or_end("bus_arrival"), {"bus_arrival": "bus_arrival", END: END})
     graph.add_edge("policy_qa", "verify_policy")
     graph.add_conditional_edges("verify_policy", back_or_end("policy_qa"), {"policy_qa": "policy_qa", END: END})
     graph.add_edge("out_of_scope", END)
-    return graph.compile()
+    return graph.compile(name="chat_graph")
 
 
 KEEP_LAST_MESSAGES = 6  # 그래프에 보내는 이전 대화 상한 (토큰 절약)
@@ -255,17 +262,43 @@ class ChatTurn:
     tables: list[dict]
     messages: list = field(default_factory=list)  # 이번 턴에 새로 생긴 메시지 (도구 호출·결과 포함)
     sources: list[dict] = field(default_factory=list)  # retrieve_docs가 찾은 문서 출처 (정책 답변일 때)
+    trace_id: str | None = None  # LangSmith 루트 실행(chat_turn) ID. 트레이싱이 꺼져 있으면 None
 
 
-async def run_chat(graph, message: str, history: list[tuple[str, str]]) -> ChatTurn:
-    """사용자 메시지 하나를 그래프에 넣고 답변·표를 꺼낸다. history는 (role, content) 목록."""
+def _trace_inputs(inputs: dict) -> dict:
+    """루트 트레이스에 남길 입력 (그래프 객체·긴 대화 기록은 빼고 요약)."""
+    history = inputs.get("history") or []
+    return {"message": inputs.get("message"), "history_turns": len(history),
+            "last_assistant": next((c for r, c in reversed(history) if r == "assistant"), None)}
+
+
+def _trace_outputs(turn: "ChatTurn") -> dict:
+    return {"reply": turn.reply, "intent": turn.intent,
+            "tables": [t.get("kind") for t in turn.tables],
+            "sources": [s["citation"] for s in turn.sources]}
+
+
+@traceable(name="chat_turn", run_type="chain", metadata={"app": APP_NAME},
+           process_inputs=_trace_inputs, process_outputs=_trace_outputs)
+async def run_chat(graph, message: str, history: list[tuple[str, str]],
+                   source: str = "web", session_id: str | None = None) -> ChatTurn:
+    """사용자 메시지 하나를 그래프에 넣고 답변·표를 꺼낸다. history는 (role, content) 목록.
+
+    LangSmith에는 질문 1건이 chat_turn 루트 실행 하나로 남는다. session_id는 대화 단위 묶음(Threads),
+    source는 web/test/eval 구분에 쓴다.
+    """
+    trace_id = annotate_current_run(
+        metadata={"session_id": session_id or "", "source": source},
+        tags=[f"source:{source}"],
+    )
     # 브라우저가 보내 준 대화 기록으로 맥락(후보 정류소 번호 선택 등)을 이어간다
     recent = [(r, c) for r, c in history if r in ("user", "assistant") and c][-KEEP_LAST_MESSAGES:]
     while recent and recent[0][0] != "user":
         recent.pop(0)
     inputs = recent + [("user", message)]
 
-    result = await graph.ainvoke({"messages": inputs}, {"recursion_limit": 20})
+    result = await graph.ainvoke({"messages": inputs}, {"recursion_limit": 20, "run_name": "chat_graph"})
+    annotate_current_run(metadata={"intent": result.get("intent")}, tags=[f"intent:{result.get('intent')}"])
     turn = result["messages"][len(inputs):]
     # 모델이 render_table 호출과 함께 답을 먼저 쓰고 마지막 메시지를 비우는 경우가 있어,
     # 마지막 메시지가 비면 이번 턴의 가장 최근 AI 텍스트를 쓴다.
@@ -284,4 +317,5 @@ async def run_chat(graph, message: str, history: list[tuple[str, str]]) -> ChatT
                 if d["citation"] not in seen:
                     seen.add(d["citation"])
                     sources.append({"title": d["title"], "heading": d["heading"], "citation": d["citation"]})
-    return ChatTurn(reply=reply, intent=result.get("intent"), tables=tables, messages=turn, sources=sources)
+    return ChatTurn(reply=reply, intent=result.get("intent"), tables=tables, messages=turn, sources=sources,
+                    trace_id=trace_id)

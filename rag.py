@@ -20,7 +20,7 @@ import json
 import math
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import yaml
@@ -29,6 +29,7 @@ from kiwipiepy import Kiwi
 from langchain_aws import BedrockEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import tool
+from langsmith import traceable
 from pydantic import BaseModel, Field
 from rank_bm25 import BM25Okapi
 
@@ -203,11 +204,13 @@ RERANK_PROMPT = ChatPromptTemplate.from_messages([
 
 
 def build_expand_chain(llm=None):
-    return EXPAND_PROMPT | (llm or make_llm(max_tokens=400)).with_structured_output(ExpandedQuery)
+    chain = EXPAND_PROMPT | (llm or make_llm(max_tokens=400)).with_structured_output(ExpandedQuery)
+    return chain.with_config(run_name="query_expansion")
 
 
 def build_rerank_chain(llm=None):
-    return RERANK_PROMPT | (llm or make_llm(max_tokens=800)).with_structured_output(RerankResult)
+    chain = RERANK_PROMPT | (llm or make_llm(max_tokens=800)).with_structured_output(RerankResult)
+    return chain.with_config(run_name="rerank")
 
 
 # ---------- 검색기 ----------
@@ -235,16 +238,43 @@ class Retriever:
         vectors = await store.embed_chunks(chunks) if chunks else []
         return cls(chunks, vectors, store)
 
-    def _bm25_rank(self, query: str, n: int) -> list[int]:
+    # 각 검색 단계는 LangSmith에 하위 실행으로 남는다 (rag_search 아래 bm25 · dense · rrf_fusion).
+    # 결과는 트레이스에서 읽기 쉽도록 청크 ID·소제목·점수를 담은 dict 목록으로 돌려준다.
+
+    def _ranked(self, idxs, scores) -> list[dict]:
+        return [{"idx": i, "id": self.chunks[i].id, "heading": self.chunks[i].heading, "score": round(float(scores[i]), 4)}
+                for i in idxs]
+
+    @traceable(name="bm25", run_type="retriever", process_inputs=lambda d: {"query": d["query"], "n": d["n"]})
+    def _bm25_rank(self, query: str, n: int) -> list[dict]:
         scores = self.bm25.get_scores(tokenize(query))
         ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
-        return [i for i in ranked[:n] if scores[i] > 0]
+        return self._ranked([i for i in ranked[:n] if scores[i] > 0], scores)
 
-    async def _dense_rank(self, query: str, n: int) -> list[int]:
+    @traceable(name="dense", run_type="retriever", process_inputs=lambda d: {"query": d["query"], "n": d["n"]})
+    async def _dense_rank(self, query: str, n: int) -> list[dict]:
         q = await self.store.embed_query(query)
         sims = [_cosine(q, v) for v in self.vectors]
-        return sorted(range(len(sims)), key=lambda i: sims[i], reverse=True)[:n]
+        return self._ranked(sorted(range(len(sims)), key=lambda i: sims[i], reverse=True)[:n], sims)
 
+    @traceable(name="rrf_fusion", run_type="chain",
+               process_inputs=lambda d: {"rankings": [[x["id"] for x in r] for r in d["rankings"]]})
+    def _rrf(self, rankings: list[list[dict]]) -> list[dict]:
+        """RRF: 각 목록에서의 순위 r에 대해 1/(k + r)을 더한다."""
+        fused: dict[int, float] = {}
+        for ranking in rankings:
+            for r, item in enumerate(ranking, 1):
+                fused[item["idx"]] = fused.get(item["idx"], 0.0) + 1.0 / (RRF_K + r)
+        order = sorted(fused, key=lambda i: fused[i], reverse=True)
+        return self._ranked(order, fused)
+
+    @traceable(name="rag_search", run_type="retriever",
+               process_inputs=lambda d: {"question": d["question"], "config": asdict(d.get("cfg") or RetrievalConfig())},
+               process_outputs=lambda out: {
+                   "documents": [{"page_content": h.chunk.text, "type": "Document",
+                                  "metadata": {"id": h.chunk.id, "title": h.chunk.title, "heading": h.chunk.heading,
+                                               "rrf": round(h.rrf, 4), "rerank": h.rerank}} for h in out["hits"]],
+                   "queries": out["queries"], "keywords": out["keywords"]})
     async def search(self, question: str, cfg: RetrievalConfig | None = None) -> dict:
         """질문으로 청크를 찾는다. 반환: {"hits": [Hit], "queries": [...], "keywords": [...]}"""
         cfg = cfg or RetrievalConfig()
@@ -258,19 +288,14 @@ class Retriever:
             keywords = [k for k in exp.keywords if k.strip()][:6]
 
         # 순위 목록들을 모은다: 질문별 BM25(키워드를 붙여서) + 질문별 임베딩
-        rankings: list[list[int]] = []
+        rankings: list[list[dict]] = []
         if cfg.use_bm25:
             kw = " ".join(keywords)
             rankings += [self._bm25_rank(f"{q} {kw}", cfg.candidates) for q in queries]
         if cfg.use_dense:
             rankings += await asyncio.gather(*(self._dense_rank(q, cfg.candidates) for q in queries))
 
-        # RRF: 각 목록에서의 순위 r에 대해 1/(k + r)을 더한다
-        fused: dict[int, float] = {}
-        for ranking in rankings:
-            for r, idx in enumerate(ranking, 1):
-                fused[idx] = fused.get(idx, 0.0) + 1.0 / (RRF_K + r)
-        hits = [Hit(self.chunks[i], rrf=s) for i, s in sorted(fused.items(), key=lambda x: x[1], reverse=True)]
+        hits = [Hit(self.chunks[x["idx"]], rrf=x["score"]) for x in self._rrf(rankings)]
 
         if cfg.use_rerank and hits:
             pool = hits[:cfg.rerank_pool]
