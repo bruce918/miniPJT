@@ -25,6 +25,13 @@ verify는 도착 도구 없이 도착 시간을 말하거나 데이터 도구 �
 다시 해도 근거 없는 도착 시간을 말하면 안전 문구로 바꿔 내보내지 않는다.
 새 기능은 `src/workflows/chat/`의 `Intent`에 값을 추가하고 단계 서브그래프에 노드를 등록해 붙인다 (계획 노드가 새 intent로도 단계를 나눈다).
 
+**실행** (프로젝트 루트에서. 소스는 모두 `src/` 아래 도메인 폴더에 있고, 폴더 역할·배치 규칙은 `CLAUDE.md`에 있다)
+```
+python -m src.tools.bus_mcp.server               # 1) 버스 MCP 서버 (127.0.0.1:8765/mcp)
+uvicorn src.channels.web.app:app --port 8000     # 2) 웹 챗봇 (http://localhost:8000)
+python -m src.channels.telegram                  # 3) (선택) 텔레그램 봇
+```
+
 **복합 질문 흐름 (Plan-Execute + 보류 계획)**
 1. "오리역 도착정보와 성인3명의 버스요금을 알려줘" → plan: `[bus_arrival "오리역 버스 도착정보", policy_qa "성인 3명의 버스 요금 얼마야?"]`
 2. 첫 단계에서 오리역 후보가 5곳 → 후보 표를 보여 주고 멈춘다. 남은 단계는 대화 ID(`session_id`)로 Store에 저장하고(30분 유효)
@@ -224,9 +231,22 @@ verify는 도착 도구 없이 도착 시간을 말하거나 데이터 도구 �
    | 출력 | 개인정보 | 주민등록번호·카드번호 등은 항상 가리고, 전화번호·이메일은 정책 문서(`docs/policy`)에 나온 공식 연락처(예: 031-246-4211)가 아니면 가린다 |
 
    걸린 경우는 트레이스에 `guard:pii:휴대전화번호`, `guard:leak:prompt` 같은 태그로 남는다. `src/evaluation/evaluate.py`는 그래프를 직접 부르므로 입력 필터를 거치지 않고(LLM 방어선 평가용), 출력 필터는 거친다.
-   규칙 단위 시험은 `python -m src.evaluation.test_guardrails` (46건: PII 9종 검출, 버스 데이터 9종 오탐 없음, 인젝션 11종 검출, 정상 질문 8종 오탐 없음, 기록 정리, 출력 유출·오탐 검사).
+   규칙 단위 시험은 `python -m src.evaluation.test_guardrails` (52건: PII 9종 검출, 버스 데이터 9종 오탐 없음, 인젝션 11종 검출, 정상 질문 8종 오탐 없음, 기록 정리, 출력 유출·오탐 검사, 요금 합계 교정·오탐 6건).
    기존 테스트·평가 질문 59건에 입력 필터를 돌렸을 때 걸린 것은 의도한 인젝션 3건뿐이었다.
 - 세부 케이스는 `src/evaluation/test_queries.json`의 guardrail 항목에서 검증한다. `python -m src.evaluation.run_tests`로 실행 (MCP 서버와 챗봇을 먼저 띄울 것).
+- **인-아웃 세트 `src/evaluation/test_queries.csv`** (20건, `python -m src.evaluation.run_tests --csv`)
+  - 컬럼: `id`, `category`(positive 8 · negative 4 · edge 5 · guardrail 3), `input`, `expected_traits`, `forbidden`, `expected_tools`, `note`. 여러 항목은 `;`로 나눈다.
+  - 판정: `expected_tools`는 규칙으로(응답의 `tools`에 모두 있어야 함, 공란이면 검사 안 함), `expected_traits`·`forbidden`은 LLM 판사가 항목별로 본다 (`src/evaluation/prompts.py`·`schemas.py`).
+    판사에게는 답변·표 평문과 함께 분류·표 종류와 제목·차단 여부·가린 개인정보·출처·호출한 도구를 준다.
+  - `/api/chat`은 `client: test` 요청에만 `tools`(이번 턴에 호출한 도구 이름)를 채운다. 웹·텔레그램 응답은 그대로다.
+  - 화면 동작(말풍선 숨김, ↻ 버튼, 내 말풍선 가림)은 API로 볼 수 없으므로 기대 항목에 넣지 않는다.
+  - 결과는 `eval_results/csv_tests_<시각>.json`에 항목별 판정·이유와 함께 남는다.
+  - 모델 한도 초과 안내가 온 케이스는 판사에게 넘기지 않고 "한도 초과"로 표시한다. `render_table`을 빠뜨렸지만 서버 안전망이 표를 그린 경우는 JSON 세트처럼 실패로 세지 않고 따로 집계한다.
+  - **결과 (2026-11-13):** 20건 모두 통과 (positive 8/8, negative 4/4, edge 5/5, guardrail 3/3).
+    전체 실행에서 2번 1건이 공공 API 일시 오류로 실패했고, 그 케이스만 다시 돌려 통과했다.
+  - **이 세트로 찾아 고친 것:** 12번(비트코인 결제)에서 정책 답변이 문서에 없는 '휴대폰 결제'를 지어내거나 "낼 수 없습니다"라고 단정했다.
+    정책 프롬프트 [근거 규칙]에 두 가지를 넣었다. 문서에 없다는 것을 "안 된다"의 근거로 쓰지 않고, 일반 상식을 문서 내용처럼 덧붙이지 않는다.
+    고친 뒤 비트코인 4회, 애플페이, 자전거, 반려견 질문 모두 "문서에서 확인하지 못했어요"와 문의처로 답했다. 문서에 나온 결제 방법(교통카드·현금)만 덧붙였다.
 
 ## 5. 성공 기준
 - **완성 기준:** `src/evaluation/test_queries.json`의 인-아웃 케이스 **90% 이상 통과**. 가드레일 항목(범위 밖 질문 거절, 다중 정류소 되묻기, 키 비노출)은 **100% 통과**.
@@ -235,7 +255,8 @@ verify는 도착 도구 없이 도착 시간을 말하거나 데이터 도구 �
   - 응답 시간: 질문 1건당 10초 이내
   - 답변의 도착 시간이 같은 시점의 API 원본 값과 일치 (환각 0건)
   - 정책 질문 검색: 상위 4개 안에 정답 청크 90% 이상 (Hit@4 ≥ 0.90), 답변은 검색한 문서 내용으로만 (7절)
-- **현재 결과 (2026-11-12, Plan-Execute·장기 메모리·계산 도구 추가 후):** 25건 중 25건 통과 (in 8/8, out 4/4, guardrail 8/8, classify 3/3, multi 2/2), 평균 응답 3.3초.
+- **현재 결과 (2026-11-13, `src/` 도메인 구조로 옮긴 뒤 다시 확인):** 25건 중 25건 통과, 규칙 단위 시험 52/52.
+  (2026-11-12, Plan-Execute·장기 메모리·계산 도구 추가 후) 25건 중 25건 통과 (in 8/8, out 4/4, guardrail 8/8, classify 3/3, multi 2/2), 평균 응답 3.3초.
   예전부터 가끔 실패하던 out-01("쿄쿄쿄없는정류장")은 모델이 검색 없이 "정류소 이름을 알려 주세요"라고 되묻던 케이스다.
   verify가 되묻는 답을 질문에 정류소 이름이 전혀 없을 때(예: "버스 언제 와?")만 허용하도록 바꿔 고쳤다.
   복합 질문 케이스: multi-01(후보가 여러 곳이면 후보 표에서 멈추고 이어서 답한다고 예고), multi-02(정류소 ID 도착 + 환승 규칙을 한 번에, intent `multi`).
@@ -345,7 +366,7 @@ memory_extract                  (배경) 장기 메모리 추출 — 자기 정�
 |---|---|
 | 루트 실행 구조화 | `run_chat`에 `@traceable(name="chat_turn")`. 입력은 질문·대화 길이만, 출력은 답변·intent·표 종류·출처로 요약해 기록 |
 | 대화 단위 묶음 | 브라우저가 대화마다 `session_id`를 만들어 보내고(대화 초기화 시 새로 발급) 메타데이터에 넣어 LangSmith Threads에서 대화 흐름으로 본다 |
-| 단계 이름 | LCEL 체인 `run_name`(classify, query_expansion, rerank, eval_*), 에이전트 `name`(bus_agent, policy_agent), 그래프 `chat_graph`, 라우팅 함수 이름 |
+| 단계 이름 | LCEL 체인 `run_name`(plan, classify, query_expansion, rerank, memory_extract, eval_*), 에이전트 `name`(bus_agent, policy_agent), 그래프 `chat_graph`, 라우팅 함수 이름 |
 | LangChain 밖 코드 추적 | RAG의 BM25·임베딩·RRF 함수에 `@traceable` (청크 ID·소제목·점수 기록) |
 | 환경 분리 | 웹은 `source:web`, `src/evaluation/run_tests.py`는 `source:test` 태그. `src/evaluation/evaluate.py`·`src/evaluation/eval_retrieval.py`는 `<프로젝트>-eval` 프로젝트에 기록 (`EVAL_LANGSMITH_PROJECT`로 변경) |
 | 응답 ↔ 트레이스 연결 | `/api/chat` 응답의 `trace_id`(루트 실행 ID)로 문제 답변의 트레이스를 바로 찾는다 |

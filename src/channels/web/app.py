@@ -118,7 +118,14 @@ async def generate_reply(message: str, history: list[Message], source: str, sess
         return ChatResponse(reply=error_reply(e))
     guard = {"blocked": False, "pii": checked.pii, "masked": checked.text} if checked.pii else None
     return ChatResponse(reply=turn.reply, intent=turn.intent, tables=turn.tables, sources=turn.sources,
-                        trace_id=turn.trace_id, guard=guard, parts=turn.parts, plan=turn.plan)
+                        trace_id=turn.trace_id, guard=guard, parts=turn.parts, plan=turn.plan,
+                        tools=tool_names(turn.messages) if source == "test" else [])
+
+
+def tool_names(messages: list) -> list[str]:
+    """메시지에서 호출한 도구 이름을 순서대로 (중복 제거)."""
+    names = [c["name"] for m in messages for c in (getattr(m, "tool_calls", None) or [])]
+    return list(dict.fromkeys(names))
 
 
 @app.get("/")

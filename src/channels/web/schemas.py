@@ -30,6 +30,8 @@ class ChatResponse(BaseModel):
     # Plan-Execute: 단계별 결과(화면이 차례로 그린다)와 이번 턴의 계획. 단계가 하나면 parts도 하나다.
     parts: list[dict] = []
     plan: list[dict] = []
+    # 이번 턴에 호출한 도구 이름 (테스트 요청(client=test)에만 채운다. 회귀 테스트가 expected_tools를 검사)
+    tools: list[str] = []
 
 
 class FeedbackRequest(BaseModel):

@@ -16,6 +16,7 @@ python -m src.channels.telegram                  # 3) (선택) 텔레그램 봇
 ```bash
 python -m src.evaluation.test_guardrails         # 규칙 단위 시험 (모델·서버 불필요)
 python -m src.evaluation.run_tests               # 회귀 테스트 (1·2번 서버 필요)
+python -m src.evaluation.run_tests --csv         # 인-아웃 세트 test_queries.csv (LLM 판사, 1·2번 서버 필요)
 python -m src.evaluation.evaluate                # 품질 평가 (RAGAS 방식 + LLM 판사, 비용 큼)
 python -m src.evaluation.eval_retrieval          # 검색 평가 (ablation)
 ```
@@ -41,7 +42,7 @@ src/
 ├── channels/          사용자 접점
 │   ├── web/           FastAPI 앱(app.py) · API 스키마(schemas.py) · 화면(static/index.html)
 │   └── telegram/      텔레그램 봇 (bot.py · render.py · table_image.py, 별도 requirements.txt)
-└── evaluation/        회귀 테스트·평가 스크립트와 데이터셋(*.json)
+└── evaluation/        회귀 테스트·평가 스크립트, 판사 프롬프트·스키마, 데이터셋(*.json·*.csv)
 ```
 
 ## 각 폴더의 역할
@@ -56,7 +57,7 @@ src/
 | `guardrails/` | 모델 입력 전·답변 출력 전 규칙 필터 | `shared` |
 | `auth/` | 로그인·세션·즐겨찾기 API 라우터 (SQLite `data/app.db`) | `shared` |
 | `channels/` | 외부 진입점. 웹은 FastAPI 앱이 워크플로를 부르고, 텔레그램은 웹 API를 HTTP로 부른다 | 모든 도메인 (텔레그램은 HTTP만) |
-| `evaluation/` | 실행 중인 서버나 워크플로를 시험·평가한다. 테스트 데이터셋(json)도 여기 둔다 | 모든 도메인 |
+| `evaluation/` | 실행 중인 서버나 워크플로를 시험·평가한다. 테스트 데이터셋(json·csv)도 여기 둔다 | 모든 도메인 |
 
 의존 방향은 `channels → workflows → agents → tools → shared`이다. 반대 방향 import는 만들지 않는다.
 
