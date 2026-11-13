@@ -1,10 +1,10 @@
 """경기 버스봇 텔레그램 봇 (롱 폴링).
 
-웹 챗봇 서버(main.py)의 /api/chat·/api/arrivals를 그대로 불러 쓴다. 질문 분류·MCP 도착 조회·정책 검색은
+웹 챗봇 서버(src/channels/web/app.py)의 /api/chat·/api/arrivals를 그대로 불러 쓴다. 질문 분류·MCP 도착 조회·정책 검색은
 모두 챗봇 서버가 하고, 이 봇은 텔레그램 메시지 <-> 챗봇 API 변환만 맡는다.
 
 실행 (MCP 서버와 챗봇 서버가 먼저 떠 있어야 한다):
-    python -m telegram_bot
+    python -m src.channels.telegram
 
 .env:
     TELEGRAM_BOT_TOKEN       (필수) BotFather에서 받은 토큰

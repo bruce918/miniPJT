@@ -4,7 +4,7 @@
 챗봇 서버(`main.py`)가 하고, 이 폴더의 봇은 텔레그램 메시지와 챗봇 API(`/api/chat`, `/api/arrivals`) 사이의 변환만 맡는다.
 
 ```
-텔레그램 앱 ⇄ Telegram Bot API ⇄ telegram_bot (롱 폴링) ⇄ 챗봇 서버 :8000 ⇄ MCP 서버 :8765
+텔레그램 앱 ⇄ Telegram Bot API ⇄ src/channels/telegram (롱 폴링) ⇄ 챗봇 서버 :8000 ⇄ MCP 서버 :8765
 ```
 
 ## 실행
@@ -12,15 +12,15 @@
 봇 전용 패키지(표 그림용 Pillow)를 설치한다.
 
 ```bash
-pip install -r telegram_bot/requirements.txt
+pip install -r src/channels/telegram/requirements.txt
 ```
 
 MCP 서버와 챗봇 서버를 먼저 띄운 뒤, 프로젝트 루트에서 실행한다.
 
 ```bash
-python bus_server.py
-uvicorn main:app --port 8000
-python -m telegram_bot
+python -m src.tools.bus_mcp.server
+uvicorn src.channels.web.app:app --port 8000
+python -m src.channels.telegram
 ```
 
 롱 폴링 방식이라 공개 주소나 HTTPS, 방화벽 설정이 필요 없다. 같은 토큰으로 봇을 두 곳에서 동시에 띄우면
