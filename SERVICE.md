@@ -1,10 +1,10 @@
 # SERVICE · 경기 버스 도착 챗봇
 
 정류소 이름만 말하면 경기도 버스의 실시간 도착 정보를 알려 주고, 요금·환승·분실물 같은 **버스 이용 정책**도 공식 문서를 검색해 답하는 대화형 에이전트.
-웹 챗봇(`main.py` + `index.html`)은 LangGraph 그래프(`chat_graph.py`)로 질문을 단계로 나눈 뒤(Plan-Execute) 단계마다 맞는 에이전트로 보낸다.
+웹 챗봇(`src/channels/web/app.py` + `static/index.html`)은 LangGraph 그래프(`src/workflows/chat/`)로 질문을 단계로 나눈 뒤(Plan-Execute) 단계마다 맞는 에이전트로 보낸다.
 "오리역 도착정보와 성인 3명 버스 요금 알려줘" 같은 복합 질문도 한 번에 처리한다.
-- 도착 정보: 버스 MCP 서버(`bus_server.py`)가 노출한 도구로만 조회한다.
-- 이용 정책: `retrieve_docs` 도구(RAG, `rag.py`)로 정책 문서(`docs/policy/`)를 검색한 결과로만 답한다.
+- 도착 정보: 버스 MCP 서버(`src/tools/bus_mcp/server.py`)가 노출한 도구로만 조회한다.
+- 이용 정책: `retrieve_docs` 도구(RAG, `src/tools/retrieval/`)로 정책 문서(`docs/policy/`)를 검색한 결과로만 답한다.
 
 ```
 바깥 그래프 (Plan-Execute)
@@ -23,7 +23,7 @@ START -+-> bus_arrival  (MCP 도구 + render_table을 쓰는 ReAct 에이전트)
 ```
 verify는 도착 도구 없이 도착 시간을 말하거나 데이터 도구 없이 답한 경우를 잡아 에이전트에게 한 번 다시 시킨다.
 다시 해도 근거 없는 도착 시간을 말하면 안전 문구로 바꿔 내보내지 않는다.
-새 기능은 `chat_graph.py`의 `Intent`에 값을 추가하고 단계 서브그래프에 노드를 등록해 붙인다 (계획 노드가 새 intent로도 단계를 나눈다).
+새 기능은 `src/workflows/chat/`의 `Intent`에 값을 추가하고 단계 서브그래프에 노드를 등록해 붙인다 (계획 노드가 새 intent로도 단계를 나눈다).
 
 **복합 질문 흐름 (Plan-Execute + 보류 계획)**
 1. "오리역 도착정보와 성인3명의 버스요금을 알려줘" → plan: `[bus_arrival "오리역 버스 도착정보", policy_qa "성인 3명의 버스 요금 얼마야?"]`
@@ -37,7 +37,7 @@ verify는 도착 도구 없이 도착 시간을 말하거나 데이터 도구 �
 - 이어서 실행할 때 단계가 보는 대화 기록 속 원래 복합 질문은 멈춘 단계의 질문으로 바꿔 보여 준다
   ("오리역 도착…어린이 2명 성인 3명 요금 알려줘" → "오리역 버스 도착 정보"). 프롬프트 지시만으로는 도착 에이전트가
   "요금은 안내할 수 없어요"를 덧붙이는 일을 막지 못해 서버에서 처리한다.
-- **요금 계산:** 정책 에이전트에 `calculate` 도구(`calc_tool.py`, 사칙연산만 허용하는 AST 계산기)를 주고, 답에 곱셈식이 있는데
+- **요금 계산:** 정책 에이전트에 `calculate` 도구(`src/tools/calculator/tool.py`, 사칙연산만 허용하는 AST 계산기)를 주고, 답에 곱셈식이 있는데
   도구를 안 썼으면 verify_policy가 한 번 다시 시킨다. 그래도 모델이 일부 합계를 직접 계산하는 경우가 있어,
   답을 내보내기 전에 "단가 × 인원 + … = 합계원" 식을 서버가 다시 계산해 틀린 합계를 고친다(`fix_totals`, 트레이스 태그 `fix:arithmetic`).
   실제로 "어린이 830원 × 2 + 성인 1,650원 × 3"을 9,960원·6,310원으로, 현금 합계를 6,300원(정답 6,900원)으로 답한 적이 있다.
@@ -47,7 +47,7 @@ verify는 도착 도구 없이 도착 시간을 말하거나 데이터 도구 �
   예전 화면은 `parts`를 몰라 도착 표가 있는 응답의 말풍선(요금 답변 포함)을 통째로 숨기고 출처만 보여 줬다.
 - 확인 (2026-11-12): 위 시나리오에서 1턴 6.1초(후보 표 + 예고), 2턴 11.4초(도착 표 + 요금 답변 + 출처). 웹 화면에서도 같은 순서로 그려지는 것을 확인했다.
 
-**장기 메모리 (LangGraph Store, `memory.py`, SQLite `data/memory.db`)**
+**장기 메모리 (LangGraph Store, `src/memory/store.py`, SQLite `data/memory.db`)**
 
 | 구분 | 내용 |
 |---|---|
@@ -82,15 +82,15 @@ verify는 도착 도구 없이 도착 시간을 말하거나 데이터 도구 �
   - MCP 서버로 도구를 분리해 두어 다른 에이전트·채널에서도 재사용할 수 있다.
 
 ## 3. 사용 예상 도구·데이터
-- **MCP 도구** (`bus_server.py`, fastmcp, streamable-http `127.0.0.1:8765/mcp`)
+- **MCP 도구** (`src/tools/bus_mcp/server.py`, fastmcp, streamable-http `127.0.0.1:8765/mcp`)
 
   | 도구 | 기능 | 데이터 |
   |---|---|---|
-  | `search_bus_station(name, city)` | 정류소 이름(또는 정류소번호) → 정류소 ID(9자리)·정류소번호·시군. 후보가 2곳 이상이면 방향 구분용 **다음 정류장**(`next`)도 붙인다 | `gg_stations.json` (로컬) + 다음 정류장은 `next_stop.py` (아래) |
+  | `search_bus_station(name, city)` | 정류소 이름(또는 정류소번호) → 정류소 ID(9자리)·정류소번호·시군. 후보가 2곳 이상이면 방향 구분용 **다음 정류장**(`next`)도 붙인다 | `src/tools/bus_mcp/gg_stations.json` (로컬) + 다음 정류장은 `src/tools/bus_mcp/next_stop.py` (아래) |
   | `get_bus_arrival_list(station_id)` | 정류소의 노선별 도착 예정 시간·남은 정류장·빈 좌석 | 경기도_버스도착정보 조회 v2 `getBusArrivalListv2` |
   | `get_bus_arrival_item(station_id, route_id, sta_order)` | 한 노선의 도착 정보 | 같은 서비스 `getBusArrivalItemv2` |
 
-- **로컬 도구** (`table_tool.py`, 에이전트에 MCP 도구와 함께 등록)
+- **로컬 도구** (`src/tools/table/tool.py`, 에이전트에 MCP 도구와 함께 등록)
 
   | 도구 | 기능 | 데이터 |
   |---|---|---|
@@ -98,12 +98,12 @@ verify는 도착 도구 없이 도착 시간을 말하거나 데이터 도구 �
 
   모델이 표 도구를 빠뜨리면 서버가 같은 함수로 표를 만든다 (`auto: true`로 표시하고 로그를 남긴다).
 
-- **RAG 도구** (`rag.py`, 정책 에이전트에 등록)
+- **RAG 도구** (`src/tools/retrieval/`, 정책 에이전트에 등록)
 
   | 도구 | 기능 | 데이터 |
   |---|---|---|
   | `retrieve_docs(query)` | 정책·제도 질문으로 문서 청크를 찾아 상위 4개와 출처를 돌려준다 | `docs/policy/*.md` (10개 문서, `##` 소제목 단위 51개 청크) |
-  | `calculate(expression)` | 요금 합계 같은 사칙연산 (`calc_tool.py`). 모델이 직접 곱셈·덧셈을 하지 않게 한다 | — |
+  | `calculate(expression)` | 요금 합계 같은 사칙연산 (`src/tools/calculator/tool.py`). 모델이 직접 곱셈·덧셈을 하지 않게 한다 | — |
 
   검색 단계 (각 단계는 `RetrievalConfig`로 켜고 끌 수 있다):
   1. **쿼리 확장** (LCEL): 질문을 다른 표현 2개로 바꾸고 문서에 쓰일 공식 용어·동의어를 뽑는다 (예: 갈아타기 → 환승, 물건 두고 내림 → 분실물).
@@ -139,16 +139,16 @@ verify는 도착 도구 없이 도착 시간을 말하거나 데이터 도구 �
 
   | 체인 | 위치 | 입력 변수 | 출력 모델 |
   |---|---|---|---|
-  | plan | `chat_graph.build_plan_chain()` | `system` (계획 프롬프트 + 사용자 기억), `messages` (직전 대화) | `Plan` (steps: intent·query 최대 3개) |
-  | 메모리 추출 | `memory._extractor()` | `message` | `MemoryUpdate` (요금 구분·결제 수단·이동 지원·사는 곳) |
-  | 쿼리 확장 | `rag.build_expand_chain()` | `question` | `ExpandedQuery` (다른 표현·동의어 키워드) |
-  | 리랭킹 | `rag.build_rerank_chain()` | `question, candidates` | `RerankResult` (후보별 0~10점) |
-  | statements · nli | `evaluate.build_eval_chains()` | `question, answer` / `contexts, statements` | `Statements` / `Verdicts` (Faithfulness) |
+  | plan | `src/workflows/chat/planner.py` `build_plan_chain()` | `system` (계획 프롬프트 + 사용자 기억), `messages` (직전 대화) | `Plan` (steps: intent·query 최대 3개) |
+  | 메모리 추출 | `src/memory/store.py` `_extractor()` | `message` | `MemoryUpdate` (요금 구분·결제 수단·이동 지원·사는 곳) |
+  | 쿼리 확장 | `src/tools/retrieval/retriever.py` `build_expand_chain()` | `question` | `ExpandedQuery` (다른 표현·동의어 키워드) |
+  | 리랭킹 | `src/tools/retrieval/retriever.py` `build_rerank_chain()` | `question, candidates` | `RerankResult` (후보별 0~10점) |
+  | statements · nli | `src/evaluation/evaluate.py` `build_eval_chains()` | `question, answer` / `contexts, statements` | `Statements` / `Verdicts` (Faithfulness) |
   | questions | 〃 | `answer` | `GeneratedQuestions` (Answer Relevancy) |
   | goal · judge | 〃 | `transcript, reference` | `GoalVerdict` / `JudgeScore` (1~5 범위 강제) |
 
   템플릿에는 고정 문구만 두고 도구 결과 JSON·대화 기록처럼 중괄호가 들어갈 수 있는 값은 변수로만 넘긴다.
-- **인터페이스:** FastAPI 웹 챗봇 (`main.py` + `index.html`)
+- **인터페이스:** FastAPI 웹 챗봇 (`src/channels/web/app.py` + `static/index.html`)
   - API: `POST /api/chat`(질문 → 답변·표·출처·`trace_id`), `POST /api/feedback`(👍/👎 → LangSmith),
     `GET /api/arrivals?station_id=`(도착 표 새로고침, 모델 없이 MCP 도착 조회만 다시 함, 9자리 숫자만 받음), `GET /api/health`
   - **화면 디자인:** 메신저 채팅방 분위기 (상표·로고는 쓰지 않음). 하늘빛 회색 배경, 날짜 표시, 노란 내 말풍선과
@@ -165,7 +165,7 @@ verify는 도착 도구 없이 도착 시간을 말하거나 데이터 도구 �
     폰 폭(560px 이하)에서는 정류소 ID·차량 칸을 숨기고 긴 이름은 줄바꿈해 375px에서도 가로 스크롤이 없다.
   - **도착 표 제목:** 모델이 정한 제목(정류소 ID나 다른 이름이 섞이던 문제) 대신, 서버가 실제로 조회한 정류소 ID로
     정류소 이름을 찾아 "미금역.2001아울렛 도착 정보"처럼 붙인다. 같은 이름 정류소를 구분하도록 다음 정류장을 알면
-    표 아래 안내에 "다음 정류장 → ○○ 방향"을 붙인다 (`table_tool.arrival_title`).
+    표 아래 안내에 "다음 정류장 → ○○ 방향"을 붙인다 (`src/tools/table/tool.py` `arrival_title`).
   - **도착 표 새로고침:** 제목 줄 오른쪽에 "오전 11:59 기준"과 ↻ 버튼. 누르면 `/api/arrivals`로 도착 정보만 다시 받아
     표를 그 자리에서 바꾸고 기준 시간을 갱신한다. 모델을 거치지 않아 빠르고 대화에 메시지가 쌓이지 않는다.
     실패하면 기존 표를 두고 "갱신 실패"를 표시한다. 오는 버스가 없으면 "지금 도착 예정인 버스가 없어요"라고 안내한다.
@@ -182,23 +182,23 @@ verify는 도착 도구 없이 도착 시간을 말하거나 데이터 도구 �
   - **출처:** 정책 답변 아래 출처마다 "바로가기 ↗" 링크를 붙여 공식 페이지를 새 탭에서 연다
     (서버가 http/https 주소만 넘기고, 링크에 `rel="noopener noreferrer"`).
   - **평문 답변:** 화면은 평문으로 보여 주므로, 모델이 프롬프트를 어기고 쓴 마크다운 기호(`**`, `__`, `#`, `` ` ``)를
-    서버가 답변을 돌려주기 전에 지운다 (`chat_graph.strip_markdown`).
-- **텔레그램 봇** (`telegram_bot/`, `python -m telegram_bot`): 같은 버스봇을 텔레그램에서 쓴다. 봇은 챗봇 서버의
+    서버가 답변을 돌려주기 전에 지운다 (`src/workflows/chat/graph.py` `strip_markdown`).
+- **텔레그램 봇** (`src/channels/telegram/`, `python -m src.channels.telegram`): 같은 버스봇을 텔레그램에서 쓴다. 봇은 챗봇 서버의
   `/api/chat`·`/api/arrivals`를 불러 결과를 텔레그램 메시지로 바꾸기만 하므로, 분류·도착 조회·정책 검색·가드레일은 웹과 같다.
-  정류소 후보와 도착 정보는 표를 그림(PNG, `telegram_bot/table_image.py`)으로 그려 보낸다. 후보 표에는 고르기 버튼(정류소 ID로 조회), 도착 표에는 ↻ 새로고침 버튼(그림을 새 표로 교체)이 붙고, 정책 답변은 출처 링크로 보여 준다.
+  정류소 후보와 도착 정보는 표를 그림(PNG, `src/channels/telegram/table_image.py`)으로 그려 보낸다. 후보 표에는 고르기 버튼(정류소 ID로 조회), 도착 표에는 ↻ 새로고침 버튼(그림을 새 표로 교체)이 붙고, 정책 답변은 출처 링크로 보여 준다.
   롱 폴링이라 공개 주소가 필요 없고, `TELEGRAM_ALLOWED_USERS`로 쓸 수 있는 사람을 제한할 수 있다.
-  트레이스는 `source:telegram`으로 구분된다. 자세한 내용은 `telegram_bot/README.md`.
+  트레이스는 `source:telegram`으로 구분된다. 자세한 내용은 `src/channels/telegram/README.md`.
 - **데이터 소스:** 모두 실제 데이터
   - 공공데이터포털 경기도 버스도착정보 API (실시간, `DATA_GO_KR_KEY` 필요)
   - 공공데이터포털 경기도_정류소 조회(`getBusStationViaRouteListv2`)·경기도_버스노선 조회(`getBusRouteStationListv2`):
-    후보 정류소의 **다음 정류장**을 구한다 (`next_stop.py`). 정류소를 지나는 앞쪽 노선 최대 2개에서, 경유 노선 목록의
+    후보 정류소의 **다음 정류장**을 구한다 (`src/tools/bus_mcp/next_stop.py`). 정류소를 지나는 앞쪽 노선 최대 2개에서, 경유 노선 목록의
     `staOrder`(그 노선에서 이 정류소의 순번) 바로 다음 정류소를 찾는다(갈리면 다수결, 마지막이면 "종점").
     정류소별 결과는 `.cache/next_stops.json`에 7일 캐시한다. API를 쓸 수 없으면 다음 정류장 칸 없이 기존처럼 보여 주고,
     인증 오류는 10분간 다시 부르지 않는다. 후보 표에서는 넓은 화면은 정류소와 시군 사이 칸으로, 폰 폭은 정류소 이름 아래
     "→ 다음 정류장"으로 보인다.
     **확인 (2026-11-12, 실제 API):** "미금역" 후보 7곳 모두 다음 정류장이 나오고, 같은 이름 정류소끼리
     (미금역.2001아울렛 7045 → 로얄냉장 / 7043 → 까치마을건영빌라.구미도서관 등) 방향이 갈린다. 첫 조회 0.6초, 캐시 후 0.01초.
-  - 공공데이터 정류소 목록으로 만든 `gg_stations.json` (정류소 46,070건)
+  - 공공데이터 정류소 목록으로 만든 `src/tools/bus_mcp/gg_stations.json` (정류소 46,070건)
   - 경기도청 누리집 등 공식 안내를 요약한 정책 문서 `docs/policy/` (10건)
 
 ## 4. 서비스 정책 (가드레일 요약)
@@ -210,7 +210,7 @@ verify는 도착 도구 없이 도착 시간을 말하거나 데이터 도구 �
 6. **정책 답변은 검색한 문서에 있는 내용으로만 한다.** 정책 에이전트는 `retrieve_docs`를 먼저 호출해야 하고, 검색 없이 답하면 verify_policy가 한 번 다시 시킨 뒤 그래도 안 되면 "문서에서 확인하지 못했어요. 120 경기도 콜센터로 문의해 주세요."로 바꾼다.
    문서에 없는 내용은 답하지 않고 공식 문의처를 안내하며, 출처는 모델이 아니라 서버가 검색 결과에서 꺼내 표시한다.
 7. **개인정보는 최소한만 받는다.** Google 로그인은 `openid profile` 범위만 요청하고(이메일 없음), 사용자는 구글 고유 ID(`sub`)로만 구분한다. 즐겨찾기 API는 로그인한 본인 것만 읽고 쓴다.
-8. **입출력 필터링 (PII·프롬프트 인젝션, `guardrails.py`).** 모델을 부르기 전과 답을 돌려주기 전에 규칙으로 한 번 더 거른다.
+8. **입출력 필터링 (PII·프롬프트 인젝션, `src/guardrails/filters.py`).** 모델을 부르기 전과 답을 돌려주기 전에 규칙으로 한 번 더 거른다.
    계획 노드의 out_of_scope 분류(LLM 판단)는 규칙을 빠져나간 요청을 막는 두 번째 방어선으로 남긴다.
 
    | 단계 | 대상 | 처리 |
@@ -223,13 +223,13 @@ verify는 도착 도구 없이 도착 시간을 말하거나 데이터 도구 �
    | 출력 | 시스템 프롬프트 유출 | 답과 프롬프트(도착·정책·분류)를 공백을 지우고 25자 조각으로 비교해, 같은 조각이 60자 넘게 덮으면 답 전체를 바꾼다. 모델에게 그대로 말하라고 시킨 따옴표 속 안내 문구와, 주제 목록 한 줄을 되풀이하는 정도는 걸리지 않는다 |
    | 출력 | 개인정보 | 주민등록번호·카드번호 등은 항상 가리고, 전화번호·이메일은 정책 문서(`docs/policy`)에 나온 공식 연락처(예: 031-246-4211)가 아니면 가린다 |
 
-   걸린 경우는 트레이스에 `guard:pii:휴대전화번호`, `guard:leak:prompt` 같은 태그로 남는다. `evaluate.py`는 그래프를 직접 부르므로 입력 필터를 거치지 않고(LLM 방어선 평가용), 출력 필터는 거친다.
-   규칙 단위 시험은 `python test_guardrails.py` (46건: PII 9종 검출, 버스 데이터 9종 오탐 없음, 인젝션 11종 검출, 정상 질문 8종 오탐 없음, 기록 정리, 출력 유출·오탐 검사).
+   걸린 경우는 트레이스에 `guard:pii:휴대전화번호`, `guard:leak:prompt` 같은 태그로 남는다. `src/evaluation/evaluate.py`는 그래프를 직접 부르므로 입력 필터를 거치지 않고(LLM 방어선 평가용), 출력 필터는 거친다.
+   규칙 단위 시험은 `python -m src.evaluation.test_guardrails` (46건: PII 9종 검출, 버스 데이터 9종 오탐 없음, 인젝션 11종 검출, 정상 질문 8종 오탐 없음, 기록 정리, 출력 유출·오탐 검사).
    기존 테스트·평가 질문 59건에 입력 필터를 돌렸을 때 걸린 것은 의도한 인젝션 3건뿐이었다.
-- 세부 케이스는 `test_queries.json`의 guardrail 항목에서 검증한다. `python run_tests.py`로 실행 (MCP 서버와 챗봇을 먼저 띄울 것).
+- 세부 케이스는 `src/evaluation/test_queries.json`의 guardrail 항목에서 검증한다. `python -m src.evaluation.run_tests`로 실행 (MCP 서버와 챗봇을 먼저 띄울 것).
 
 ## 5. 성공 기준
-- **완성 기준:** `test_queries.json`의 인-아웃 케이스 **90% 이상 통과**. 가드레일 항목(범위 밖 질문 거절, 다중 정류소 되묻기, 키 비노출)은 **100% 통과**.
+- **완성 기준:** `src/evaluation/test_queries.json`의 인-아웃 케이스 **90% 이상 통과**. 가드레일 항목(범위 밖 질문 거절, 다중 정류소 되묻기, 키 비노출)은 **100% 통과**.
 - **"쓸만하다" 지표:**
   - 정류소 이름 질문 → 도착 정보까지 걸리는 대화 턴 수: 단일 정류소 1턴, 동명 정류소 2턴 이내
   - 응답 시간: 질문 1건당 10초 이내
@@ -246,10 +246,10 @@ verify는 도착 도구 없이 도착 시간을 말하거나 데이터 도구 �
 - 품질 지표(정류소·도착 값 대조, RAGAS 방식, 판사)는 6절, 정책 문서 검색 품질은 7절에 따로 기록한다.
 
 ## 6. 평가 (정류소·도착 값 대조 우선 · RAGAS 방식 지표 · LLM-as-Judge)
-`run_tests.py`가 답변 형태를 규칙으로 검사하는 회귀 테스트라면, `evaluate.py`는 자체 평가 세트(`eval_set.json`, 15개 샘플)로 **품질 지표**를 낸다. 지표는 우선순위대로 정류소·도착 값 대조(6-1), RAGAS 방식 지표와 LLM-as-Judge(6-2) 순으로 본다.
-버스 MCP 서버만 띄우고 `python evaluate.py --repeat 3`으로 실행하면 `eval_results/`에 JSON·Markdown 보고서가 남는다.
+`src/evaluation/run_tests.py`가 답변 형태를 규칙으로 검사하는 회귀 테스트라면, `src/evaluation/evaluate.py`는 자체 평가 세트(`src/evaluation/eval_set.json`, 15개 샘플)로 **품질 지표**를 낸다. 지표는 우선순위대로 정류소·도착 값 대조(6-1), RAGAS 방식 지표와 LLM-as-Judge(6-2) 순으로 본다.
+버스 MCP 서버만 띄우고 `python -m src.evaluation.evaluate --repeat 3`으로 실행하면 `eval_results/`에 JSON·Markdown 보고서가 남는다.
 
-### 6-1. 우선 지표: 정류소·도착 값 대조 (규칙 기반, `grounding_check.py`)
+### 6-1. 우선 지표: 정류소·도착 값 대조 (규칙 기반, `src/evaluation/grounding_check.py`)
 판사(LLM)는 행선지를 정류소로 착각하거나 둘째 차 시간을 첫째 차로 읽는 등 오판이 있어, 높은 판사 점수보다
 **고른 정류소를 실제로 조회했는지**와 **답한 도착 값이 원본과 같은지**를 먼저 본다. LLM 없이 규칙으로만 계산한다.
 
@@ -302,10 +302,10 @@ verify는 도착 도구 없이 도착 시간을 말하거나 데이터 도구 �
 남은 감점: 후보 선택 턴에서 모델이 `render_table`을 가끔 빠뜨림(안전망이 표를 그려 화면은 정상), 판사가 둘째 차 도착 시간을 첫째 차로 오독한 사례 1건.
 
 ## 7. RAG 검색 평가 (하이브리드 검색 · 쿼리 확장 · 리랭킹)
-`eval_retrieval.py`가 라벨 세트(`retrieval_set.json`, 24개 질문)로 검색 단계를 하나씩 더해 가며 성능을 비교한다 (ablation).
+`src/evaluation/eval_retrieval.py`가 라벨 세트(`src/evaluation/retrieval_set.json`, 24개 질문)로 검색 단계를 하나씩 더해 가며 성능을 비교한다 (ablation).
 질문마다 정답 문서와 정답 청크에 들어 있어야 할 단어를 두고, 상위 4개 안에 정답 청크가 있는지 본다.
 질문은 "버스에 지갑 두고 내렸어", "밤늦게 갈아탈 때도 30분 안에 타야 해?"처럼 문서 용어와 다른 구어체·동의어를 일부러 섞었다.
-버스 MCP 서버 없이 `python eval_retrieval.py`로 실행한다.
+버스 MCP 서버 없이 `python -m src.evaluation.eval_retrieval`로 실행한다.
 
 **결과 (2026-11-12, 51개 청크, top_k=4):**
 
@@ -320,10 +320,10 @@ verify는 도착 도구 없이 도착 시간을 말하거나 데이터 도구 �
 - 하이브리드는 BM25·임베딩 어느 한쪽보다 낫고, 쿼리 확장이 구어체를 문서 용어로 이어 줘 Hit@4를 0.88 → 0.96으로 올렸다.
 - 리랭킹은 정답을 맨 위로 끌어올려 Hit@1을 0.75 → 0.92로 가장 크게 올렸다. 대신 질문마다 LLM 호출이 2번(확장·리랭킹) 늘어난다.
 - **한계:** 1회 실행 결과이고 쿼리 확장·리랭킹은 LLM이라 실행마다 조금 달라질 수 있다. 라벨 세트를 문서를 쓴 쪽에서 만들었으므로, 실제 사용자 질문을 모아 세트를 넓혀야 한다.
-  정책 질문의 답변 품질(Faithfulness 등)은 아직 `eval_set.json`에 넣지 않았다.
+  정책 질문의 답변 품질(Faithfulness 등)은 아직 `src/evaluation/eval_set.json`에 넣지 않았다.
 
 ## 8. Observability (LangSmith 트레이스)
-`.env`의 `LANGSMITH_TRACING=true`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`로 모든 실행을 LangSmith에 기록한다. 트레이스 설정은 `observability.py`에 모았다.
+`.env`의 `LANGSMITH_TRACING=true`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`로 모든 실행을 LangSmith에 기록한다. 트레이스 설정은 `src/shared/observability.py`에 모았다.
 
 **트레이스 구조 (질문 1건 = 루트 실행 1개):**
 ```
@@ -347,7 +347,7 @@ memory_extract                  (배경) 장기 메모리 추출 — 자기 정�
 | 대화 단위 묶음 | 브라우저가 대화마다 `session_id`를 만들어 보내고(대화 초기화 시 새로 발급) 메타데이터에 넣어 LangSmith Threads에서 대화 흐름으로 본다 |
 | 단계 이름 | LCEL 체인 `run_name`(classify, query_expansion, rerank, eval_*), 에이전트 `name`(bus_agent, policy_agent), 그래프 `chat_graph`, 라우팅 함수 이름 |
 | LangChain 밖 코드 추적 | RAG의 BM25·임베딩·RRF 함수에 `@traceable` (청크 ID·소제목·점수 기록) |
-| 환경 분리 | 웹은 `source:web`, `run_tests.py`는 `source:test` 태그. `evaluate.py`·`eval_retrieval.py`는 `<프로젝트>-eval` 프로젝트에 기록 (`EVAL_LANGSMITH_PROJECT`로 변경) |
+| 환경 분리 | 웹은 `source:web`, `src/evaluation/run_tests.py`는 `source:test` 태그. `src/evaluation/evaluate.py`·`src/evaluation/eval_retrieval.py`는 `<프로젝트>-eval` 프로젝트에 기록 (`EVAL_LANGSMITH_PROJECT`로 변경) |
 | 응답 ↔ 트레이스 연결 | `/api/chat` 응답의 `trace_id`(루트 실행 ID)로 문제 답변의 트레이스를 바로 찾는다 |
 | 사용자 피드백 | 답변 아래 👍/👎 → `/api/feedback` → LangSmith 피드백 `user_score`(1/0)로 해당 트레이스에 기록 |
 
@@ -355,7 +355,7 @@ memory_extract                  (배경) 장기 메모리 추출 — 자기 정�
 - **확인 (2026-11-12):** 같은 대화 ID로 보낸 정책 질문·도착 질문이 각각 `chat_turn` 루트로 기록되고 메타데이터·태그·실행 트리·👍 피드백이 붙는 것을 LangSmith API로 확인했다. 회귀 테스트 20건은 `source:test`로, 평가 실행은 `-eval` 프로젝트로 분리되어 기록됐다.
 
 ## 9. 로그인 · 사용자별 즐겨찾기 (Google 계정)
-`auth.py`에 모았다. Google OpenID Connect로 로그인하고, 로그인 상태는 서버 세션 쿠키로 유지한다 (JWT를 브라우저에 두지 않음).
+`src/auth/router.py`에 모았다. Google OpenID Connect로 로그인하고, 로그인 상태는 서버 세션 쿠키로 유지한다 (JWT를 브라우저에 두지 않음).
 
 | 항목 | 방식 |
 |---|---|

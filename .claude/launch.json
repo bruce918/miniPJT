@@ -4,13 +4,13 @@
     {
       "name": "bus-mcp",
       "runtimeExecutable": ".venv/Scripts/python.exe",
-      "runtimeArgs": ["bus_server.py"],
+      "runtimeArgs": ["-m", "src.tools.bus_mcp.server"],
       "port": 8765
     },
     {
       "name": "chatbot",
       "runtimeExecutable": ".venv/Scripts/python.exe",
-      "runtimeArgs": ["-m", "uvicorn", "main:app", "--port", "8000"],
+      "runtimeArgs": ["-m", "uvicorn", "src.channels.web.app:app", "--port", "8000"],
       "port": 8000
     }
   ]

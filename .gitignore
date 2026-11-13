@@ -16,3 +16,5 @@ eval_results/
 .cache/
 # 사용자·세션·즐겨찾기 DB (auth.py)
 data/
+# 개인 작업 기록 (GitHub에 올리지 않음)
+history.md
